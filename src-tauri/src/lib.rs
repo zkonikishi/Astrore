@@ -1051,7 +1051,8 @@ fn start_server_inner(
                     state.auto_restart.lock().map(|config| config.clone()).unwrap_or_default()
                 };
                 let restart_count = {
-                    let mut process = monitor_app.state::<AppState>().process.lock().unwrap();
+                    let state = monitor_app.state::<AppState>();
+                    let mut process = state.process.lock().unwrap();
                     let count = process.as_ref().map(|p| p.restart_count).unwrap_or(0);
                     *process = None;
                     count
