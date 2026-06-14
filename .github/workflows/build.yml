@@ -64,12 +64,33 @@ jobs:
       - name: Build web Agent
         run: cargo build --manifest-path src-tauri/Cargo.toml --release --bin astrore-agent
 
+      - name: Package Windows Agent with web UI
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force agent-package/dist | Out-Null
+          Copy-Item dist/* agent-package/dist -Recurse
+          Copy-Item src-tauri/target/release/astrore-agent.exe agent-package/
+          Copy-Item deploy/start-agent.bat agent-package/
+          Compress-Archive -Path agent-package/* -DestinationPath Astrore-Agent-Windows.zip
+
+      - name: Package Unix Agent with web UI
+        if: matrix.platform != 'windows-latest'
+        shell: bash
+        run: |
+          mkdir -p agent-package/dist
+          cp -R dist/. agent-package/dist/
+          cp src-tauri/target/release/astrore-agent agent-package/
+          cp deploy/start-agent.sh agent-package/
+          chmod +x agent-package/astrore-agent agent-package/start-agent.sh
+          tar -czf Astrore-Agent-${{ matrix.platform == 'ubuntu-22.04' && 'Linux' || 'macOS' }}.tar.gz -C agent-package .
+
       - name: Upload bundles
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: |
-            dist/**
             src-tauri/target/release/bundle/**
-            src-tauri/target/release/astrore-agent*
+            Astrore-Agent-*.zip
+            Astrore-Agent-*.tar.gz
           if-no-files-found: error

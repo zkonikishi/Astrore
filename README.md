@@ -16,17 +16,22 @@ npm.cmd run dev
 npm.cmd run build
 ```
 
-## Linux 网页端
+## Agent 网页端
 
-GitHub Actions 的 Linux 构建产物中包含 `astrore-agent`。将 Agent 与前端 `dist` 放在服务器上，然后运行：
+GitHub Actions 会为 Windows、Linux 和 macOS 生成 `Astrore-Agent-*` 一体包。压缩包已经包含 Agent、网页界面和启动脚本，不需要单独部署前端。
+
+- Windows：解压后双击 `start-agent.bat`
+- Linux / macOS：解压后运行 `./start-agent.sh`
+
+Agent 启动后访问 `http://127.0.0.1:1421` 即可进入网页控制台。Agent 同时提供网页、API、WebSocket 实时推送和 Minecraft 服务端管理能力。
+
+手动启动时可直接运行：
 
 ```bash
-ASTRORE_BIND=127.0.0.1:1421 \
-ASTRORE_WEB_ROOT=./dist \
 ./astrore-agent
 ```
 
-访问 `http://127.0.0.1:1421` 即可进入网页控制台。
+默认会自动读取 Agent 可执行文件旁边的 `dist` 网页目录，并将配置保存到同目录的 `.astrore-agent.json`。
 
 未设置令牌时，Agent 只允许同源网页调用 API；因此开发模式下从 `http://localhost:1420` 连接 Agent 也需要设置令牌。
 
@@ -35,7 +40,6 @@ ASTRORE_WEB_ROOT=./dist \
 ```bash
 ASTRORE_BIND=0.0.0.0:1421 \
 ASTRORE_TOKEN='replace-with-a-long-random-token' \
-ASTRORE_WEB_ROOT=./dist \
 ./astrore-agent
 ```
 
@@ -69,8 +73,8 @@ ASTRORE_WEB_ROOT=./dist \
 
 `.github/workflows/build.yml` 会构建并上传：
 
-- Windows：NSIS、MSI、`astrore-agent.exe`
-- Linux：DEB、AppImage、`astrore-agent`
-- macOS：App、DMG、`astrore-agent`
+- Windows：NSIS、MSI、`Astrore-Agent-Windows.zip`
+- Linux：DEB、AppImage、`Astrore-Agent-Linux.tar.gz`
+- macOS：App、DMG、`Astrore-Agent-macOS.tar.gz`
 
 产物当前未进行代码签名。

@@ -780,10 +780,15 @@ async fn websocket_client(mut socket: WebSocket, state: AgentState) {
 
 #[tokio::main]
 async fn main() {
+    let executable_dir = env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+        .or_else(|| env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
     let bind = env::var("ASTRORE_BIND").unwrap_or_else(|_| "127.0.0.1:1421".into());
     let token = env::var("ASTRORE_TOKEN").unwrap_or_default();
-    let web_root = env::var("ASTRORE_WEB_ROOT").unwrap_or_else(|_| "dist".into());
-    let config_path = env::var("ASTRORE_CONFIG").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from(".astrore-agent.json"));
+    let web_root = env::var("ASTRORE_WEB_ROOT").map(PathBuf::from).unwrap_or_else(|_| executable_dir.join("dist"));
+    let config_path = env::var("ASTRORE_CONFIG").map(PathBuf::from).unwrap_or_else(|_| executable_dir.join(".astrore-agent.json"));
     if token.is_empty() && !bind.starts_with("127.0.0.1:") && !bind.starts_with("localhost:") {
         eprintln!("拒绝启动：监听非本机地址时必须设置 ASTRORE_TOKEN");
         std::process::exit(2);
