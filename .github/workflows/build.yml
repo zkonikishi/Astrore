@@ -1,0 +1,75 @@
+name: Build Astrore
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            artifact: Astrore-Windows
+            bundles: nsis,msi
+          - platform: ubuntu-22.04
+            artifact: Astrore-Linux
+            bundles: deb,appimage
+          - platform: macos-latest
+            artifact: Astrore-macOS
+            bundles: app,dmg
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Check frontend
+        run: npm run build
+
+      - name: Generate platform icons
+        run: npm run tauri icon public/astrore-icon.png
+
+      - name: Build Tauri bundles
+        run: npm run tauri build -- --bundles ${{ matrix.bundles }}
+
+      - name: Build web Agent
+        run: cargo build --manifest-path src-tauri/Cargo.toml --release --bin astrore-agent
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/**
+            src-tauri/target/release/bundle/**
+            src-tauri/target/release/astrore-agent*
+          if-no-files-found: error

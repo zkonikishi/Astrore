@@ -1,0 +1,27 @@
+[package]
+name = "astrore"
+version = "0.2.0"
+description = "Astrore cross-platform Minecraft server control"
+authors = ["Astrore"]
+edition = "2021"
+default-run = "astrore"
+
+[lib]
+name = "astrore_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tokio = { version = "1", features = ["process", "sync", "rt-multi-thread", "io-util", "time", "fs", "macros", "net"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+sysinfo = "0.33"
+regex-lite = "0.1"
+flate2 = "1"
+tar = "0.4"
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["cors", "fs"] }
