@@ -873,7 +873,7 @@ async fn start_server(
             return Err("已有服务端正在运行".into());
         }
     }
-    start_server_inner(config, app, state, 0).await
+    start_server_inner(config, app, 0).await
 }
 
 static COMBINED_PERFORMANCE_REGEX: LazyLock<regex_lite::Regex> =
@@ -953,18 +953,19 @@ fn emit_system_metrics(app: &AppHandle) {
     let _ = app.emit("server-metrics", metrics.clone());
 }
 
-async fn start_server_inner(
+fn start_server_inner(
     config: InstanceConfig,
     app: AppHandle,
-    state: State<'_, AppState>,
     restart_count: u32,
-) -> Result<ServerStatus, String> {
-    ensure_local_management()?;
-    state.stopping.store(false, Ordering::SeqCst);
-    let (root, jar) = validate_config(&config)?;
-    if !eula_state(&config.instance_path).accepted {
-        return Err("EULA_REQUIRED".into());
-    }
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ServerStatus, String>> + Send>> {
+    Box::pin(async move {
+        let state = app.state::<AppState>();
+        ensure_local_management()?;
+        state.stopping.store(false, Ordering::SeqCst);
+        let (root, jar) = validate_config(&config)?;
+        if !eula_state(&config.instance_path).accepted {
+            return Err("EULA_REQUIRED".into());
+        }
 
     let java = if config.java_path.trim().is_empty() {
         "java"
@@ -1077,13 +1078,11 @@ async fn start_server_inner(
                         emit_console(&monitor_app, "[Astrore] 正在自动重启服务端...");
                         let app_handle = monitor_app.clone();
                         let restart_config = config_clone.clone();
-                        let restart_state = monitor_app.state::<AppState>();
-                        if let Err(e) = Box::pin(start_server_inner(
+                        if let Err(e) = start_server_inner(
                             restart_config,
                             app_handle,
-                            restart_state,
                             restart_count + 1,
-                        ))
+                        )
                         .await
                         {
                             emit_console(&monitor_app, format!("[Astrore] 自动重启失败: {e}"));
@@ -1100,7 +1099,8 @@ async fn start_server_inner(
             emit_system_metrics(&monitor_app);
         }
     });
-    Ok(status)
+        Ok(status)
+    })
 }
 
 #[tauri::command]
