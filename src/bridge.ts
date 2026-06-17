@@ -425,15 +425,6 @@ export async function downloadJava(downloadUrl: string, fileName: string): Promi
   return "";
 }
 
-export async function selectDownloadPath(defaultName: string): Promise<string | null> {
-  if (!isTauriRuntime()) return null;
-  try {
-    const { save } = await import("@tauri-apps/plugin-dialog");
-    return await save({ defaultPath: defaultName, title: "保存下载文件" });
-  } catch {
-    return null;
-  }
-}
 
 export async function searchSpiget(query: string): Promise<SpigetResource[]> {
   if (isTauriRuntime()) return invoke("search_spiget", { query });

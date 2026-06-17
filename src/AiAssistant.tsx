@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Bot, Eraser, Search, Send, Settings2, ShieldAlert, Sparkles, Thermometer, Hash, FileText } from "lucide-react";
+import { Bot, Eraser, Search, Send, Settings2, ShieldAlert, Sparkles } from "lucide-react";
 import { aiChat, type AiMessage, type InstanceConfig, type ServerMetrics } from "./bridge";
 import { PROVIDERS, findProviderById, type ProviderMeta } from "./aiProviders";
 

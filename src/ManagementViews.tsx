@@ -40,7 +40,6 @@ import {
   type FileEntry,
   type BuildInfo,
   type BackupInfo,
-  type CoreInfo,
   type CoreTypeInfo,
   type DownloadProgress,
   type JavaRelease,

@@ -37,7 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/zkonikishi/Astrore/main/deploy/inst
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `--version v0.2.0` | 指定版本号 | `latest` |
+| `--version v0.2.1` | 指定版本号 | `latest` |
 | `--dir /opt/astrore` | 安装目录 | `/opt/astrore-agent` |
 | `--port 1421` | 监听端口 | `1421` |
 | `--host 0.0.0.0` | 监听地址 | `127.0.0.1` |
@@ -47,7 +47,7 @@ curl -fsSL https://raw.githubusercontent.com/zkonikishi/Astrore/main/deploy/inst
 示例：指定版本并允许局域网访问：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zkonikishi/Astrore/main/deploy/install.sh | sudo bash -s -- --version v0.2.0 --host 0.0.0.0 --token my-secret-token
+curl -fsSL https://raw.githubusercontent.com/zkonikishi/Astrore/main/deploy/install.sh | sudo bash -s -- --version v0.2.1 --host 0.0.0.0 --token my-secret-token
 ```
 
 脚本会自动完成：

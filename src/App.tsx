@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   Activity,
@@ -7,9 +7,7 @@ import {
   CircleStop,
   Command,
   Cpu,
-  Database,
   Download,
-  FileText,
   Folder,
   Gauge,
   HardDrive,
@@ -20,8 +18,6 @@ import {
   Puzzle,
   MoreHorizontal,
   Play,
-  Plug,
-  FileCog,
   RefreshCw,
   Search,
   Server,
@@ -681,35 +677,6 @@ function ControlPanel({ lines, command, setCommand, sendCommand, running, start,
   </section>;
 }
 
-function FullConsole(props: Parameters<typeof Console>[0]) {
-  const [quickCommands] = useState([
-    "list", "say 欢迎来到服务器！", "time set day", "weather clear",
-    "gamemode creative @p", "give @p minecraft:diamond 64",
-    "tp @p ~ ~100 ~", "kill @e[type=item]",
-    "save-all", "reload confirm", "whitelist reload", "banlist",
-  ]);
-  const [showQuick, setShowQuick] = useState(false);
-  return <section className="panel full-console">
-    <PanelHeader icon={<TerminalSquare />} title="实时控制台" action="UTF-8" />
-    <Console {...props} maxLines={500} />
-    <div className="quick-commands-bar">
-      <button className="secondary" onClick={() => setShowQuick(!showQuick)}>
-        <ChevronDown size={14} style={{ transform: showQuick ? "rotate(180deg)" : "" }} />
-        快捷命令
-      </button>
-      {showQuick && (
-        <div className="quick-commands-list">
-          {quickCommands.map((cmd) => (
-            <button key={cmd} onClick={() => { props.setCommand(cmd); setShowQuick(false); }}>
-              {cmd}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  </section>;
-}
-
 function InstanceConfigView({ subTab, setSubTab, mode, config, onChange, onSave, instancePath, onError, autoRestart, onAutoRestartChange }: { subTab: InstanceTab; setSubTab: (tab: InstanceTab) => void; mode: string; config: InstanceConfig; onChange: (config: InstanceConfig) => void; onSave: () => void; instancePath: string; onError: (message: string) => void; autoRestart: AutoRestartConfig; onAutoRestartChange: (config: AutoRestartConfig) => void }) {
   const update = (value: Partial<InstanceConfig>) => onChange({ ...config, ...value });
   return <section className="hub-page">
@@ -819,15 +786,6 @@ function RulesSettingsView({ instancePath, onError }: { instancePath: string; on
   </section>;
 }
 
-function LegacyRestartPanel({ autoRestart, onAutoRestartChange }: { autoRestart: AutoRestartConfig; onAutoRestartChange: (config: AutoRestartConfig) => void }) {
-  return <div className="panel settings-form"><PanelHeader icon={<RefreshCw />} title="崩溃自动重启" action={autoRestart.enabled ? "已启用" : "已禁用"} />
-        <div className="setting-row"><div><span>启用崩溃自动重启</span><small>服务端意外退出时自动重新启动</small></div><input type="checkbox" checked={autoRestart.enabled} onChange={(e) => onAutoRestartChange({ ...autoRestart, enabled: e.target.checked })} /></div>
-        <label>最大重启次数<input type="number" min={1} max={10} value={autoRestart.maxRestarts} onChange={(e) => onAutoRestartChange({ ...autoRestart, maxRestarts: Number(e.target.value) })} /></label>
-        <label>重启延迟（秒）<input type="number" min={1} max={60} value={autoRestart.restartDelaySecs} onChange={(e) => onAutoRestartChange({ ...autoRestart, restartDelaySecs: Number(e.target.value) })} /></label>
-        <div className="form-actions"><button className="primary" onClick={() => { setAutoRestartConfig(autoRestart).catch(() => undefined); }}>保存</button></div>
-      </div>;
-}
-
 function FilesHub({ subTab, setSubTab, instancePath, onError }: { subTab: FilesTab; setSubTab: (tab: FilesTab) => void; instancePath: string; onError: (msg: string) => void }) {
   const [pluginMode, setPluginMode] = useState<"toggle" | "config">("toggle");
   const [modMode, setModMode] = useState<"toggle" | "config">("toggle");
@@ -873,7 +831,7 @@ function AboutView() {
       <li>下载源：FastMirror API v3</li>
     </ul>
     <h3>版本</h3>
-    <p>Astrore Control v0.2.0</p>
+    <p>Astrore Control v0.2.1</p>
     <p>开发者：<a href="https://afdian.com/a/zkonikishi" target="_blank">zkonikishi</a></p>
     <h3>开源许可</h3>
     <p>本项目基于 MIT 许可证开源。感谢所有贡献者和开源社区的支持。</p>

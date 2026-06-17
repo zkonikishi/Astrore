@@ -282,7 +282,7 @@ impl ExtensionManager {
         let initialized = client.send_request_sync("initialize", Some(serde_json::json!({
             "protocolVersion": "2025-03-26",
             "capabilities": {},
-            "clientInfo": { "name": "Astrore", "version": "0.2.0" }
+            "clientInfo": { "name": "Astrore", "version": "0.2.1" }
         })));
         if let Err(error) = initialized {
             client.stop();
