@@ -1,0 +1,19 @@
+{
+  "id": "qqbot-mcp",
+  "name": "QQ \u673a\u5668\u4eba",
+  "version": "1.0.0",
+  "description": "\u901a\u8fc7 QQ \u673a\u5668\u4eba\u8fdc\u7a0b\u7ba1\u7406 Minecraft \u670d\u52a1\u5668",
+  "author": "Astrore Team",
+  "icon": "Bot",
+  "runtime": "external-mcp",
+  "homepage": "https://github.com/zkonikishi/Astrore",
+  "entry": {
+    "command": "python",
+    "args": ["server.py"],
+    "env": {
+      "QQ_BOT_TOKEN": "",
+      "QQ_BOT_ADMIN": ""
+    }
+  },
+  "permissions": ["server.status", "server.command", "server.players"]
+}

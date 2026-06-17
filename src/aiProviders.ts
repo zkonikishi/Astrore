@@ -1,0 +1,62 @@
+export interface ProviderMeta {
+  id: string;
+  name: string;
+  tag: string;
+  icon: string;
+  endpoint: string;
+  models: string[];
+  defaultModel: string;
+  apiKeyHint: string;
+  noKeyNeeded: boolean;
+}
+
+export const PROVIDERS: ProviderMeta[] = [
+  // ===== 本地 =====
+  { id: "ollama", name: "Ollama", tag: "本地", icon: "🦙", endpoint: "http://127.0.0.1:11434/v1/chat/completions", models: ["llama3.2", "llama3.1", "qwen2.5-coder", "qwen2.5", "deepseek-r1", "codellama", "mistral"], defaultModel: "llama3.2", apiKeyHint: "无需填写", noKeyNeeded: true },
+  { id: "lmstudio", name: "LM Studio", tag: "本地", icon: "💻", endpoint: "http://localhost:1234/v1/chat/completions", models: [], defaultModel: "", apiKeyHint: "无需填写", noKeyNeeded: true },
+  { id: "qwenpaw", name: "QwenPaw Local", tag: "本地", icon: "🐾", endpoint: "http://127.0.0.1:1234/v1/chat/completions", models: [], defaultModel: "", apiKeyHint: "无需填写", noKeyNeeded: true },
+
+  // ===== 海外 =====
+  { id: "openai", name: "OpenAI", tag: "海外", icon: "◎", endpoint: "https://api.openai.com/v1/chat/completions", models: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo", "o3-mini", "o1", "o1-mini"], defaultModel: "gpt-4o-mini", apiKeyHint: "sk-...", noKeyNeeded: false },
+  { id: "anthropic", name: "Anthropic Claude", tag: "海外", icon: "✦", endpoint: "https://api.anthropic.com/v1/messages", models: ["claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229", "claude-3-haiku-20240307"], defaultModel: "claude-3-5-sonnet-20241022", apiKeyHint: "sk-ant-...", noKeyNeeded: false },
+  { id: "google", name: "Google Gemini", tag: "海外", icon: "◆", endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", models: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-pro", "gemini-1.5-flash"], defaultModel: "gemini-2.5-flash", apiKeyHint: "AIza...", noKeyNeeded: false },
+  { id: "groq", name: "Groq", tag: "海外", icon: "⚡", endpoint: "https://api.groq.com/openai/v1/chat/completions", models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "deepseek-r1-distill-llama-70b", "qwen/qwen3-32b", "moonshotai/kimi-k2-instruct"], defaultModel: "llama-3.3-70b-versatile", apiKeyHint: "gsk_...", noKeyNeeded: false },
+  { id: "mistral", name: "Mistral AI", tag: "海外", icon: "🌬", endpoint: "https://api.mistral.ai/v1/chat/completions", models: ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest", "codestral-latest", "ministral-8b-latest", "ministral-3b-latest", "open-mixtral-8x22b", "open-mistral-nemo"], defaultModel: "mistral-large-latest", apiKeyHint: "ms_...", noKeyNeeded: false },
+  { id: "xai", name: "xAI Grok", tag: "海外", icon: "𝕏", endpoint: "https://api.x.ai/v1/chat/completions", models: ["grok-4", "grok-3", "grok-3-mini", "grok-2-1212", "grok-2-vision-1212"], defaultModel: "grok-3", apiKeyHint: "xai-...", noKeyNeeded: false },
+  { id: "perplexity", name: "Perplexity", tag: "搜索", icon: "🔎", endpoint: "https://api.perplexity.ai/chat/completions", models: ["sonar-pro", "sonar", "sonar-reasoning-pro", "sonar-reasoning", "sonar-deep-research"], defaultModel: "sonar-pro", apiKeyHint: "pplx-...", noKeyNeeded: false },
+  { id: "cohere", name: "Cohere", tag: "企业", icon: "◈", endpoint: "https://api.cohere.ai/compatibility/v1/chat/completions", models: ["command-a-03-2025", "command-r-plus-08-2024", "command-r-08-2024", "command-r7b-12-2024"], defaultModel: "command-a-03-2025", apiKeyHint: "COH-...", noKeyNeeded: false },
+
+  // ===== 聚合平台 =====
+  { id: "openrouter", name: "OpenRouter", tag: "聚合", icon: "🧭", endpoint: "https://openrouter.ai/api/v1/chat/completions", models: ["openai/gpt-4o-mini", "anthropic/claude-3.5-sonnet", "google/gemini-2.5-pro", "meta-llama/llama-3.3-70b-instruct", "mistralai/mistral-large", "deepseek/deepseek-chat", "x-ai/grok-4"], defaultModel: "openai/gpt-4o-mini", apiKeyHint: "sk-or-...", noKeyNeeded: false },
+  { id: "together", name: "Together AI", tag: "聚合", icon: "🤝", endpoint: "https://api.together.xyz/v1/chat/completions", models: ["meta-llama/Llama-3.3-70B-Instruct-Turbo", "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo", "mistralai/Mixtral-8x7B-Instruct-v0.1", "Qwen/Qwen2.5-72B-Instruct-Turbo", "deepseek-ai/DeepSeek-R1", "deepseek-ai/DeepSeek-V3"], defaultModel: "meta-llama/Llama-3.3-70B-Instruct-Turbo", apiKeyHint: "tgp_...", noKeyNeeded: false },
+  { id: "fireworks", name: "Fireworks AI", tag: "推理", icon: "🎆", endpoint: "https://api.fireworks.ai/inference/v1/chat/completions", models: ["accounts/fireworks/models/llama-v3p3-70b-instruct", "accounts/fireworks/models/llama-v3p1-8b-instruct", "accounts/fireworks/models/deepseek-v3", "accounts/fireworks/models/deepseek-r1", "accounts/fireworks/models/qwen2p5-coder-32b-instruct"], defaultModel: "accounts/fireworks/models/llama-v3p3-70b-instruct", apiKeyHint: "fw_...", noKeyNeeded: false },
+  { id: "nvidia", name: "NVIDIA NIM", tag: "推理", icon: "🟢", endpoint: "https://integrate.api.nvidia.com/v1/chat/completions", models: ["nvidia/llama-3.1-nemotron-ultra-253b-v1", "nvidia/llama-3.1-nemotron-70b-instruct", "meta/llama-3.1-405b-instruct", "mistralai/mixtral-8x22b-instruct-v0.1", "google/gemma-2-27b-it"], defaultModel: "nvidia/llama-3.1-nemotron-ultra-253b-v1", apiKeyHint: "nvapi-...", noKeyNeeded: false },
+  { id: "cerebras", name: "Cerebras", tag: "高速", icon: "◉", endpoint: "https://api.cerebras.ai/v1/chat/completions", models: ["llama-4-scout-17b-16e-instruct", "llama3.1-8b", "llama3.3-70b", "qwen-3-32b"], defaultModel: "llama3.3-70b", apiKeyHint: "csk-...", noKeyNeeded: false },
+  { id: "sambanova", name: "SambaNova", tag: "高速", icon: "▣", endpoint: "https://api.sambanova.ai/v1/chat/completions", models: ["Meta-Llama-3.3-70B-Instruct", "Meta-Llama-3.1-405B-Instruct", "DeepSeek-R1", "DeepSeek-V3.1", "Qwen3-32B"], defaultModel: "Meta-Llama-3.3-70B-Instruct", apiKeyHint: "sn-...", noKeyNeeded: false },
+  { id: "huggingface", name: "Hugging Face Router", tag: "聚合", icon: "🤗", endpoint: "https://router.huggingface.co/v1/chat/completions", models: ["meta-llama/Llama-3.3-70B-Instruct", "Qwen/Qwen2.5-Coder-32B-Instruct", "mistralai/Mistral-Nemo-Instruct-2407", "deepseek-ai/DeepSeek-V3"], defaultModel: "meta-llama/Llama-3.3-70B-Instruct", apiKeyHint: "hf_...", noKeyNeeded: false },
+
+  // ===== 国内厂商 =====
+  { id: "deepseek", name: "DeepSeek", tag: "推理", icon: "🧠", endpoint: "https://api.deepseek.com/v1/chat/completions", models: ["deepseek-chat", "deepseek-reasoner"], defaultModel: "deepseek-chat", apiKeyHint: "sk-...", noKeyNeeded: false },
+  { id: "qwen", name: "通义千问 (阿里云百炼)", tag: "阿里云", icon: "☁️", endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", models: ["qwen3.6-max-preview", "qwen3.6-plus", "qwen3.6-flash", "qwen3.5-plus", "qwen3.5-flash", "qwen3-max", "qwen-max", "qwen-plus", "qwen-turbo", "qwen-long", "qwq-plus", "qwq-32b", "qwen3-235b-a22b", "qwen3-32b", "qwen2.5-72b-instruct", "qwen2.5-coder-32b-instruct"], defaultModel: "qwen-plus", apiKeyHint: "sk-...", noKeyNeeded: false },
+  { id: "qwen-coding", name: "通义千问 Coding Plan", tag: "Coding", icon: "</>", endpoint: "https://coding.dashscope.aliyuncs.com/v1/chat/completions", models: ["qwen3.6-plus", "qwen3.5-plus", "qwen3-max-2026-01-23", "qwen3-coder-next", "qwen3-coder-plus", "kimi-k2.5", "glm-5", "glm-4.7", "MiniMax-M2.5"], defaultModel: "qwen3.6-plus", apiKeyHint: "sk-...", noKeyNeeded: false },
+  { id: "qwen-agent", name: "通义千问 Agent Plan", tag: "Agent", icon: "🤖", endpoint: "https://agent.dashscope.aliyuncs.com/v1/chat/completions", models: ["qwen3.6-plus", "qwen3-max-2026-01-23", "qwen3-coder-plus", "kimi-k2.5", "glm-5", "MiniMax-M2.5"], defaultModel: "qwen3.6-plus", apiKeyHint: "sk-...", noKeyNeeded: false },
+  { id: "zhipu", name: "智谱 GLM", tag: "国内", icon: "✨", endpoint: "https://open.bigmodel.cn/api/paas/v4/chat/completions", models: ["glm-4-plus", "glm-4-flash", "glm-4-air", "glm-4-airx", "glm-4-long", "glm-4", "glm-3-turbo"], defaultModel: "glm-4-flash", apiKeyHint: "xxx.", noKeyNeeded: false },
+  { id: "moonshot", name: "Kimi / 月之暗面", tag: "国内", icon: "🌙", endpoint: "https://api.moonshot.cn/v1/chat/completions", models: ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"], defaultModel: "moonshot-v1-8k", apiKeyHint: "sk-...", noKeyNeeded: false },
+  { id: "baichuan", name: "百川智能", tag: "国内", icon: "🌊", endpoint: "https://api.baichuan-ai.com/v1/chat/completions", models: ["Baichuan4", "Baichuan4-Turbo", "Baichuan4-Air", "Baichuan3-Turbo", "Baichuan3-Turbo-128k"], defaultModel: "Baichuan4-Turbo", apiKeyHint: "sk-...", noKeyNeeded: false },
+  { id: "yi", name: "零一万物 Yi", tag: "国内", icon: "1️⃣", endpoint: "https://api.lingyiwanwu.com/v1/chat/completions", models: ["yi-large", "yi-medium", "yi-medium-200k", "yi-spark", "yi-large-rag", "yi-lightning"], defaultModel: "yi-lightning", apiKeyHint: "sk-...", noKeyNeeded: false },
+  { id: "minimax", name: "MiniMax", tag: "国内", icon: "Ⓜ", endpoint: "https://api.minimax.chat/v1/chat/completions", models: ["abab7-chat", "abab6.5s-chat", "abab6.5t-chat", "abab5.5-chat"], defaultModel: "abab6.5s-chat", apiKeyHint: "eyJ...", noKeyNeeded: false },
+  { id: "doubao", name: "豆包 / 火山方舟", tag: "普通", icon: "🌋", endpoint: "https://ark.cn-beijing.volces.com/api/v3/chat/completions", models: ["doubao-seed-2.0-pro", "doubao-seed-2.0-lite", "doubao-seed-2.0-mini", "doubao-seed-2.0-code", "doubao-seed-1.6-flash", "doubao-seed-1.6", "doubao-seed-1.6-lite", "doubao-pro-256k", "doubao-pro-128k", "doubao-pro-32k", "doubao-lite-128k", "doubao-lite-32k"], defaultModel: "doubao-seed-2.0-pro", apiKeyHint: "ep-...", noKeyNeeded: false },
+  { id: "doubao-coding", name: "豆包 Coding Plan", tag: "Coding", icon: "</>", endpoint: "https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions", models: ["Doubao-Seed-2.0-pro", "Doubao-Seed-2.0-lite", "Doubao-Seed-2.0-Code", "Doubao-Seed-Code", "MiniMax-M2.5", "Kimi-K2.5", "GLM-4.7", "DeepSeek-V3.2", "ark-code-latest"], defaultModel: "ark-code-latest", apiKeyHint: "ep-...", noKeyNeeded: false },
+  { id: "doubao-agent", name: "豆包 Agent Plan", tag: "Agent", icon: "🤖", endpoint: "https://ark.cn-beijing.volces.com/api/agent/v3/chat/completions", models: ["Doubao-Seed-2.0-pro", "Doubao-Seed-2.0-lite", "Doubao-Seed-2.0-Code", "ark-agent-latest"], defaultModel: "ark-agent-latest", apiKeyHint: "ep-...", noKeyNeeded: false },
+  { id: "hunyuan", name: "腾讯混元", tag: "腾讯云", icon: "🐧", endpoint: "https://api.hunyuan.cloud.tencent.com/v1/chat/completions", models: ["hunyuan-2.0-thinking-20251109", "hunyuan-2.0-instruct-20251111", "hunyuan-turbos-latest", "hunyuan-t1-latest", "hunyuan-a13b", "hunyuan-large", "hunyuan-standard", "hunyuan-standard-256K", "hunyuan-lite", "hunyuan-pro", "hunyuan-turbo"], defaultModel: "hunyuan-turbos-latest", apiKeyHint: "sk-...", noKeyNeeded: false },
+  { id: "hunyuan-coding", name: "腾讯混元 Coding Plan", tag: "Coding", icon: "</>", endpoint: "https://api.lkeap.cloud.tencent.com/coding/v3/chat/completions", models: ["hunyuan-turbos-latest", "hunyuan-2.0-thinking-20251109", "hunyuan-2.0-instruct-20251111", "hunyuan-t1-latest", "glm-5", "glm-4.7", "kimi-k2.5", "MiniMax-M2.5"], defaultModel: "hunyuan-turbos-latest", apiKeyHint: "sk-...", noKeyNeeded: false },
+  { id: "siliconflow", name: "SiliconFlow / 硅基流动", tag: "聚合", icon: "⚡", endpoint: "https://api.siliconflow.cn/v1/chat/completions", models: ["deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1", "Qwen/Qwen3-235B-A22B", "Qwen/Qwen2.5-Coder-32B-Instruct", "THUDM/GLM-4-9B-0414"], defaultModel: "deepseek-ai/DeepSeek-V3", apiKeyHint: "sk-...", noKeyNeeded: false },
+  { id: "modelscope", name: "ModelScope", tag: "内置", icon: "🧩", endpoint: "https://api-inference.modelscope.cn/v1/chat/completions", models: ["Qwen/Qwen3-235B-A22B-Instruct-2507", "Qwen/Qwen3-Coder-480B-A35B-Instruct", "deepseek-ai/DeepSeek-V3.1"], defaultModel: "Qwen/Qwen3-Coder-480B-A35B-Instruct", apiKeyHint: "ms-...", noKeyNeeded: false },
+
+  // ===== 自定义 =====
+  { id: "custom", name: "自定义兼容接口", tag: "自定义", icon: "🔧", endpoint: "https://api.openai.com/v1/chat/completions", models: [], defaultModel: "gpt-4o-mini", apiKeyHint: "sk-...", noKeyNeeded: false },
+];
+
+export function findProviderById(id: string): ProviderMeta | undefined {
+  return PROVIDERS.find(p => p.id === id);
+}

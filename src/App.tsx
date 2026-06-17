@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   Activity,
+  Bot,
   ChevronDown,
   CircleStop,
   Command,
@@ -16,9 +17,11 @@ import {
   LayoutDashboard,
   Menu,
   MemoryStick,
+  Puzzle,
   MoreHorizontal,
   Play,
   Plug,
+  FileCog,
   RefreshCw,
   Search,
   Server,
@@ -30,7 +33,8 @@ import {
   WifiOff,
   X,
 } from "lucide-react";
-import { BackupView, DownloadCenterView, FileManagerView, PermissionsView, PluginMarketView, PluginsManagerView, PropertiesView } from "./ManagementViews";
+import { BackupView, CoreTypeView, ExtensionStoreView, FileManagerView, JavaDownloadView, PermissionsView, PluginConfigView, PluginMarketView, PluginsManagerView, PropertiesView, SpigetPluginView } from "./ManagementViews";
+import { AiAssistant } from "./AiAssistant";
 import {
   acceptEula,
   checkAgentConnection,
@@ -55,7 +59,7 @@ import {
 } from "./bridge";
 import { highlightLine } from "./consoleHighlighter";
 
-type Tab = "overview" | "console" | "download" | "files" | "backups" | "plugins" | "properties" | "permissions" | "settings" | "about" | "software";
+type Tab = "overview" | "console" | "ai" | "download" | "files" | "backups" | "plugins" | "plugin-config" | "extensions" | "properties" | "permissions" | "settings" | "about" | "software";
 
 const DEFAULT_INSTANCE: InstanceConfig = {
   name: "我的世界服务器",
@@ -276,10 +280,13 @@ function App() {
       ({
         overview: "运行概览",
         console: "实时控制台",
+        ai: "AI 运维助手",
         download: "下载中心",
         files: "文件管理",
         backups: "备份管理",
         plugins: "插件与模组",
+        "plugin-config": "插件配置",
+        extensions: "扩展商店",
         properties: "服务端配置",
         permissions: "玩家与权限",
         settings: "实例设置",
@@ -409,6 +416,8 @@ function App() {
     const routes: Array<[string[], Tab]> = [
       [["控制台", "命令", "console"], "console"], [["下载", "核心", "market"], "download"],
       [["文件", "file"], "files"], [["备份", "backup"], "backups"], [["插件", "模组", "mod", "plugin"], "plugins"],
+      [["配置编辑", "插件配置", "config"], "plugin-config"],
+      [["AI", "助手", "诊断", "报错分析"], "ai"],
       [["配置", "properties"], "properties"], [["玩家", "权限", "白名单", "op"], "permissions"], [["设置", "实例"], "settings"],
     ];
     const result = routes.find(([keywords]) => keywords.some(keyword => query.includes(keyword)));
@@ -457,10 +466,13 @@ function App() {
         <nav>
           <NavButton icon={<LayoutDashboard />} label="运行概览" active={tab === "overview"} onClick={() => setTab("overview")} />
           <NavButton icon={<TerminalSquare />} label="实时控制台" active={tab === "console"} onClick={() => setTab("console")} />
+          <NavButton icon={<Bot />} label="AI 运维助手" active={tab === "ai"} onClick={() => setTab("ai")} />
           <NavButton icon={<Download />} label="下载中心" active={tab === "download"} onClick={() => setTab("download")} />
           <NavButton icon={<Folder />} label="文件管理" active={tab === "files"} onClick={() => setTab("files")} />
           <NavButton icon={<Database />} label="备份管理" active={tab === "backups"} onClick={() => setTab("backups")} />
           <NavButton icon={<Plug />} label="插件与模组" active={tab === "plugins"} onClick={() => setTab("plugins")} />
+          <NavButton icon={<FileCog />} label="插件配置" active={tab === "plugin-config"} onClick={() => setTab("plugin-config")} />
+          <NavButton icon={<Puzzle />} label="扩展商店" active={tab === "extensions"} onClick={() => setTab("extensions")} />
           <NavButton icon={<FileText />} label="服务端配置" active={tab === "properties"} onClick={() => setTab("properties")} />
           <NavButton icon={<ShieldCheck />} label="玩家与权限" active={tab === "permissions"} onClick={() => setTab("permissions")} />
           <NavButton icon={<Settings />} label="实例设置" active={tab === "settings"} onClick={() => setTab("settings")} />
@@ -583,10 +595,13 @@ function App() {
           )}
 
           {tab === "console" && <FullConsole lines={consoleLines} command={command} setCommand={setCommand} sendCommand={sendCommand} />}
+          {tab === "ai" && <AiAssistant instance={instanceConfig} running={running} metrics={sysMetrics} consoleLines={consoleLines} onError={setError} />}
           {tab === "download" && <DownloadTab instancePath={instanceConfig.instancePath} onError={setError} />}
           {tab === "files" && <FileManagerView instancePath={instanceConfig.instancePath} onError={setError} />}
           {tab === "backups" && <BackupView instancePath={instanceConfig.instancePath} onError={setError} />}
           {tab === "plugins" && <PluginsManagerView instancePath={instanceConfig.instancePath} onError={setError} />}
+          {tab === "plugin-config" && <PluginConfigView instancePath={instanceConfig.instancePath} onError={setError} />}
+          {tab === "extensions" && <ExtensionStoreView onError={setError} />}
           {tab === "properties" && <PropertiesView instancePath={instanceConfig.instancePath} onError={setError} />}
           {tab === "permissions" && <PermissionsView instancePath={instanceConfig.instancePath} onError={setError} />}
           {tab === "settings" && <SettingsView mode={mode} config={instanceConfig} onChange={setInstanceConfig} onSave={saveInstance} autoRestart={autoRestart} onAutoRestartChange={(c) => { setAutoRestart(c); localStorage.setItem("astrore.autoRestart", JSON.stringify(c)); setAutoRestartConfig(c).catch(reason => setError(String(reason))); }} />}
@@ -664,15 +679,20 @@ function SettingsView({ mode, config, onChange, onSave, autoRestart, onAutoResta
 }
 
 function DownloadTab({ instancePath, onError }: { instancePath: string; onError: (msg: string) => void }) {
-  const [subTab, setSubTab] = useState<"core" | "market">("core");
+  const [subTab, setSubTab] = useState<"core" | "modrinth" | "spiget" | "java">("core");
   return <div>
     <div className="manager-toolbar" style={{ marginBottom: 12, background: "#fff", border: "1px solid #dfe5e1", borderRadius: 8, padding: "6px 14px" }}>
       <div className="segmented">
         <button className={subTab === "core" ? "active" : ""} onClick={() => setSubTab("core")}>服务端核心</button>
-        <button className={subTab === "market" ? "active" : ""} onClick={() => setSubTab("market")}>插件市场</button>
+        <button className={subTab === "modrinth" ? "active" : ""} onClick={() => setSubTab("modrinth")}>Modrinth</button>
+        <button className={subTab === "spiget" ? "active" : ""} onClick={() => setSubTab("spiget")}>Spiget 插件</button>
+        <button className={subTab === "java" ? "active" : ""} onClick={() => setSubTab("java")}>Java 下载</button>
       </div>
     </div>
-    {subTab === "core" ? <DownloadCenterView instancePath={instancePath} onError={onError} /> : <PluginMarketView instancePath={instancePath} onError={onError} />}
+    {subTab === "core" && <CoreTypeView instancePath={instancePath} onError={onError} />}
+    {subTab === "modrinth" && <PluginMarketView instancePath={instancePath} onError={onError} />}
+    {subTab === "spiget" && <SpigetPluginView instancePath={instancePath} onError={onError} />}
+    {subTab === "java" && <JavaDownloadView onError={onError} />}
   </div>;
 }
 

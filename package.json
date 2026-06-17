@@ -6,12 +6,14 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "registry:check": "node scripts/validate-registry.mjs",
     "preview": "vite preview --host ::",
     "agent:build": "cargo build --manifest-path src-tauri/Cargo.toml --release --bin astrore-agent",
     "tauri": "tauri"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.5.0",
+    "@tauri-apps/plugin-dialog": "^2.5.0",
     "lucide-react": "^0.468.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

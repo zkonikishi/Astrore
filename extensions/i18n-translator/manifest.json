@@ -1,0 +1,16 @@
+{
+  "id": "i18n-translator",
+  "name": "\u672c\u5730\u5316\u7ffb\u8bd1",
+  "version": "1.0.0",
+  "description": "\u4e3a Astrore \u8f6f\u4ef6\u754c\u9762\u63d0\u4f9b\u591a\u8bed\u8a00\u7ffb\u8bd1\u652f\u6301",
+  "author": "Astrore Team",
+  "icon": "Languages",
+  "runtime": "external-mcp",
+  "homepage": "https://github.com/zkonikishi/Astrore",
+  "entry": {
+    "command": "python",
+    "args": ["server.py"],
+    "env": {}
+  },
+  "permissions": ["ui.translate"]
+}

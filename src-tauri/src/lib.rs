@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs,
+    io::Cursor,
     path::{Path, PathBuf},
     process::Stdio,
     sync::{atomic::{AtomicBool, Ordering}, LazyLock, Mutex},
@@ -14,6 +16,9 @@ use tokio::{
     sync::Mutex as AsyncMutex,
     time::{sleep, interval},
 };
+
+mod mcp_client;
+use mcp_client::{is_safe_extension_id, ExtensionInfo, ExtensionManager, ExtensionManifest, McpTool};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,6 +65,8 @@ struct AppState {
     stopping: AtomicBool,
     sys: Mutex<Option<sysinfo::System>>,
     disk_tick: Mutex<u32>,
+    cancel_download: AtomicBool,
+    plugin_manager: Mutex<Option<ExtensionManager>>,
 }
 
 #[derive(Serialize)]
@@ -106,6 +113,8 @@ struct DownloadProgress {
     total: u64,
     percent: f64,
     status: String,
+    speed_mbps: f64,
+    started_at: Option<u64>,
 }
 
 #[derive(Clone, Serialize, Default)]
@@ -131,6 +140,54 @@ struct AutoRestartConfig {
     enabled: bool,
     max_restarts: u32,
     restart_delay_secs: u64,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct AiMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiRequest {
+    endpoint: String,
+    api_key: String,
+    model: String,
+    #[serde(default = "default_temperature")]
+    temperature: f64,
+    #[serde(default = "default_max_tokens")]
+    max_tokens: u32,
+    messages: Vec<AiMessage>,
+}
+
+fn default_temperature() -> f64 { 0.7 }
+fn default_max_tokens() -> u32 { 4096 }
+
+#[tauri::command]
+async fn ai_chat(request: AiRequest) -> Result<String, String> {
+    let url = reqwest::Url::parse(&request.endpoint).map_err(|error| format!("AI 接口地址无效: {error}"))?;
+    let host = url.host_str().ok_or("AI 接口地址缺少主机名")?;
+    if url.scheme() != "https" && !(url.scheme() == "http" && matches!(host, "127.0.0.1" | "localhost" | "::1")) {
+        return Err("AI 接口必须使用 HTTPS；本地模型可使用 localhost HTTP".into());
+    }
+    let mut call = reqwest::Client::new()
+        .post(url)
+        .timeout(std::time::Duration::from_secs(120))
+        .header("User-Agent", "Astrore/0.2")
+        .json(&serde_json::json!({
+        "model": request.model,
+        "messages": request.messages,
+        "temperature": request.temperature,
+        "max_tokens": request.max_tokens,
+    }));
+    if !request.api_key.is_empty() {
+        call = call.bearer_auth(request.api_key);
+    }
+    let response: serde_json::Value = call.send().await.map_err(|error| format!("AI 请求失败: {error}"))?
+        .error_for_status().map_err(|error| format!("AI 接口返回错误: {error}"))?
+        .json().await.map_err(|error| format!("无法解析 AI 响应: {error}"))?;
+    response["choices"][0]["message"]["content"].as_str().map(str::to_owned).ok_or_else(|| "AI 响应缺少内容".into())
 }
 
 impl Default for AutoRestartConfig {
@@ -684,6 +741,7 @@ async fn download_server_core(
     app: AppHandle,
 ) -> Result<String, String> {
     ensure_local_management()?;
+    app.state::<AppState>().cancel_download.store(false, Ordering::SeqCst);
     let root = safe_root(&instance_path)?;
     let info_url =
         format!("https://download.fastmirror.net/api/v3/{core_name}/{mc_version}/{build}");
@@ -719,7 +777,11 @@ async fn download_server_core(
         .error_for_status()
         .map_err(|error| format!("下载请求失败: {error}"))?;
     let total = response.content_length().unwrap_or(0);
-    let mut downloaded = 0;
+    let mut downloaded = 0u64;
+    let started_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let mut file = tokio::fs::File::create(&part)
         .await
         .map_err(|error| format!("创建下载文件失败: {error}"))?;
@@ -728,24 +790,17 @@ async fn download_server_core(
         .await
         .map_err(|error| format!("读取下载数据失败: {error}"))?
     {
+        if check_cancel(app.state()) {
+            drop(file);
+            let _ = tokio::fs::remove_file(&part).await;
+            emit_progress(&app, &file_name, downloaded, total, "cancelled", started_at);
+            return Err("下载已取消".into());
+        }
         file.write_all(&chunk)
             .await
             .map_err(|error| format!("写入下载文件失败: {error}"))?;
         downloaded += chunk.len() as u64;
-        let _ = app.emit(
-            "download-progress",
-            DownloadProgress {
-                file_name: file_name.clone(),
-                downloaded,
-                total,
-                percent: if total > 0 {
-                    downloaded as f64 / total as f64 * 100.0
-                } else {
-                    0.0
-                },
-                status: "downloading".into(),
-            },
-        );
+        emit_progress(&app, &file_name, downloaded, total, "downloading", started_at);
     }
     file.flush()
         .await
@@ -753,16 +808,7 @@ async fn download_server_core(
     tokio::fs::rename(&part, &target)
         .await
         .map_err(|error| format!("保存核心失败: {error}"))?;
-    let _ = app.emit(
-        "download-progress",
-        DownloadProgress {
-            file_name: file_name.clone(),
-            downloaded,
-            total,
-            percent: 100.0,
-            status: "completed".into(),
-        },
-    );
+    emit_progress(&app, &file_name, downloaded, total, "completed", started_at);
     Ok(file_name)
 }
 
@@ -1270,6 +1316,7 @@ async fn download_plugin(
     app: AppHandle,
 ) -> Result<String, String> {
     ensure_local_management()?;
+    app.state::<AppState>().cancel_download.store(false, Ordering::SeqCst);
     let root = safe_root(&instance_path)?;
     if !matches!(kind.as_str(), "plugins" | "mods") {
         return Err("无效的下载目标目录".into());
@@ -1302,30 +1349,548 @@ async fn download_plugin(
         .map_err(|e| format!("下载请求失败: {e}"))?;
     let total = response.content_length().unwrap_or(0);
     let mut downloaded = 0u64;
+    let started_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let mut file = tokio::fs::File::create(&part)
         .await
         .map_err(|e| format!("创建文件失败: {e}"))?;
     while let Some(chunk) = response.chunk().await.map_err(|e| format!("读取失败: {e}"))? {
+        if check_cancel(app.state()) {
+            drop(file);
+            let _ = tokio::fs::remove_file(&part).await;
+            emit_progress(&app, &file_name, downloaded, total, "cancelled", started_at);
+            return Err("下载已取消".into());
+        }
         file.write_all(&chunk).await.map_err(|e| format!("写入失败: {e}"))?;
         downloaded += chunk.len() as u64;
-        let _ = app.emit("download-progress", DownloadProgress {
-            file_name: file_name.clone(),
-            downloaded,
-            total,
-            percent: if total > 0 { downloaded as f64 / total as f64 * 100.0 } else { 0.0 },
-            status: "downloading".into(),
-        });
+        emit_progress(&app, &file_name, downloaded, total, "downloading", started_at);
     }
     file.flush().await.map_err(|e| format!("刷新失败: {e}"))?;
     tokio::fs::rename(&part, &target).await.map_err(|e| format!("保存失败: {e}"))?;
+    emit_progress(&app, &file_name, downloaded, total, "completed", started_at);
+    Ok(file_name)
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JavaRelease {
+    version: String,
+    major: u32,
+    download_url: String,
+    file_name: String,
+    size_mb: f64,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SpigetResource {
+    id: u32,
+    name: String,
+    tag: String,
+    description: String,
+    icon_url: String,
+    downloads: u64,
+    rating: f64,
+    author: String,
+    version: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CoreTypeInfo {
+    name: String,
+    label: String,
+    category: String,
+    recommend: bool,
+}
+
+static CORE_TYPES: LazyLock<Vec<CoreTypeInfo>> = LazyLock::new(|| {
+    vec![
+        CoreTypeInfo { name: "paper".into(), label: "Paper \u{2b50} (\u{63a8}\u{8350})".into(), category: "pure".into(), recommend: true },
+        CoreTypeInfo { name: "purpur".into(), label: "Purpur".into(), category: "pure".into(), recommend: false },
+        CoreTypeInfo { name: "folia".into(), label: "Folia \u{26a1} (\u{591a}\u{7ebf}\u{7a0b})".into(), category: "pure".into(), recommend: false },
+        CoreTypeInfo { name: "leaves".into(), label: "Leaves".into(), category: "pure".into(), recommend: false },
+        CoreTypeInfo { name: "vanilla".into(), label: "Vanilla (\u{539f}\u{7248})".into(), category: "vanilla".into(), recommend: false },
+        CoreTypeInfo { name: "fabric".into(), label: "Fabric (\u{6a21}\u{7ec4})".into(), category: "mod".into(), recommend: false },
+        CoreTypeInfo { name: "forge".into(), label: "Forge (\u{6a21}\u{7ec4})".into(), category: "mod".into(), recommend: false },
+        CoreTypeInfo { name: "arclight".into(), label: "Arclight \u{2b50} (\u{6a21}\u{7ec4}+\u{63d2}\u{4ef6})".into(), category: "mod".into(), recommend: true },
+        CoreTypeInfo { name: "velocity".into(), label: "Velocity (\u{4ee3}\u{7406})".into(), category: "proxy".into(), recommend: false },
+        CoreTypeInfo { name: "bungeecord".into(), label: "BungeeCord (\u{4ee3}\u{7406})".into(), category: "proxy".into(), recommend: false },
+    ]
+});
+
+#[tauri::command]
+fn get_core_types() -> Result<Vec<CoreTypeInfo>, String> {
+    Ok(CORE_TYPES.clone())
+}
+
+#[tauri::command]
+async fn list_java_releases() -> Result<Vec<JavaRelease>, String> {
+    let url = "https://api.adoptium.net/v3/assets/feature_releases/21/ga?page_size=20&image_type=jdk&jvm_impl=hotspot&vendor=eclipse";
+    let data: serde_json::Value = reqwest::Client::new()
+        .get(url)
+        .header("User-Agent", "Astrore/0.2")
+        .send().await.map_err(|e| format!("获取 Java 列表失败: {e}"))?
+        .json().await.map_err(|e| format!("解析 Java 列表失败: {e}"))?;
+    let mut releases = Vec::new();
+    for item in data.as_array().into_iter().flatten() {
+        let version_data = &item["version_data"];
+        let version = version_data["semver"].as_str().unwrap_or_default().to_string();
+        let major = version_data["major"].as_u64().unwrap_or(0) as u32;
+        for binary in item["binaries"].as_array().into_iter().flatten() {
+            let os = binary["os"].as_str().unwrap_or_default();
+            let arch = binary["architecture"].as_str().unwrap_or_default();
+            if os != "windows" || arch != "x64" { continue; }
+            if let Some(pkg) = binary["installer"].as_object() {
+                releases.push(JavaRelease {
+                    version: version.clone(),
+                    major,
+                    download_url: pkg["link"].as_str().unwrap_or_default().to_string(),
+                    file_name: pkg["name"].as_str().unwrap_or_default().to_string(),
+                    size_mb: pkg["size"].as_f64().unwrap_or(0.0) / 1_048_576.0,
+                });
+            }
+        }
+    }
+    releases.sort_by(|a, b| b.version.cmp(&a.version));
+    Ok(releases)
+}
+
+#[tauri::command]
+async fn download_java(
+    download_url: String,
+    file_name: String,
+    app: AppHandle,
+) -> Result<String, String> {
+    app.state::<AppState>().cancel_download.store(false, Ordering::SeqCst);
+    let target_dir = dirs_next::download_dir().unwrap_or_else(|| PathBuf::from("."));
+    let target = target_dir.join(&file_name);
+    let part = target_dir.join(format!("{file_name}.part"));
+    let mut response = reqwest::Client::new()
+        .get(&download_url)
+        .header("User-Agent", "Astrore/0.2")
+        .send().await.map_err(|e| format!("下载失败: {e}"))?;
+    let total = response.content_length().unwrap_or(0);
+    let mut downloaded = 0u64;
+    let started_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut file = tokio::fs::File::create(&part).await.map_err(|e| format!("创建文件失败: {e}"))?;
+    while let Some(chunk) = response.chunk().await.map_err(|e| format!("读取失败: {e}"))? {
+        if check_cancel(app.state()) {
+            drop(file);
+            let _ = tokio::fs::remove_file(&part).await;
+            emit_progress(&app, &file_name, downloaded, total, "cancelled", started_at);
+            return Err("下载已取消".into());
+        }
+        file.write_all(&chunk).await.map_err(|e| format!("写入失败: {e}"))?;
+        downloaded += chunk.len() as u64;
+        emit_progress(&app, &file_name, downloaded, total, "downloading", started_at);
+    }
+    file.flush().await.map_err(|e| format!("刷新失败: {e}"))?;
+    tokio::fs::rename(&part, &target).await.map_err(|e| format!("保存失败: {e}"))?;
+    emit_progress(&app, &file_name, downloaded, total, "completed", started_at);
+    Ok(file_name)
+}
+
+#[tauri::command]
+async fn search_spiget(query: String) -> Result<Vec<SpigetResource>, String> {
+    let url = format!("https://api.spiget.org/v2/search/resources/{query}?size=20&sort=-downloads&fields=id,name,tag,description,icon,downloads,rating,author,version");
+    let data: serde_json::Value = reqwest::Client::new()
+        .get(&url)
+        .header("User-Agent", "Astrore/0.2")
+        .send().await.map_err(|e| format!("搜索失败: {e}"))?
+        .json().await.map_err(|e| format!("解析失败: {e}"))?;
+    Ok(data.as_array().into_iter().flatten().map(|item| SpigetResource {
+        id: item["id"].as_u64().unwrap_or(0) as u32,
+        name: item["name"].as_str().unwrap_or_default().to_string(),
+        tag: item["tag"].as_str().unwrap_or_default().to_string(),
+        description: item["description"].as_str().unwrap_or_default().to_string(),
+        icon_url: item["icon"].as_object().and_then(|i| i["url"].as_str()).unwrap_or_default().to_string(),
+        downloads: item["downloads"].as_u64().unwrap_or(0),
+        rating: item["rating"].as_f64().unwrap_or(0.0),
+        author: item["author"].as_object().and_then(|a| a["name"].as_str()).unwrap_or_default().to_string(),
+        version: item["version"].as_object().and_then(|v| v["name"].as_str()).unwrap_or_default().to_string(),
+    }).collect())
+}
+
+#[tauri::command]
+async fn download_spiget_plugin(
+    instance_path: String,
+    resource_id: u32,
+    file_name: String,
+    app: AppHandle,
+) -> Result<String, String> {
+    ensure_local_management()?;
+    app.state::<AppState>().cancel_download.store(false, Ordering::SeqCst);
+    let root = safe_root(&instance_path)?;
+    let target_dir = root.join("plugins");
+    if !target_dir.exists() {
+        fs::create_dir_all(&target_dir).map_err(|e| format!("创建目录失败: {e}"))?;
+    }
+    let url = format!("https://api.spiget.org/v2/resources/{resource_id}/download");
+    let target = target_dir.join(&file_name);
+    let part = target_dir.join(format!("{file_name}.part"));
+    let mut response = reqwest::Client::new()
+        .get(&url)
+        .header("User-Agent", "Astrore/0.2")
+        .send().await.map_err(|e| format!("下载失败: {e}"))?;
+    let total = response.content_length().unwrap_or(0);
+    let mut downloaded = 0u64;
+    let started_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut file = tokio::fs::File::create(&part).await.map_err(|e| format!("创建文件失败: {e}"))?;
+    while let Some(chunk) = response.chunk().await.map_err(|e| format!("读取失败: {e}"))? {
+        if check_cancel(app.state()) {
+            drop(file);
+            let _ = tokio::fs::remove_file(&part).await;
+            emit_progress(&app, &file_name, downloaded, total, "cancelled", started_at);
+            return Err("下载已取消".into());
+        }
+        file.write_all(&chunk).await.map_err(|e| format!("写入失败: {e}"))?;
+        downloaded += chunk.len() as u64;
+        emit_progress(&app, &file_name, downloaded, total, "downloading", started_at);
+    }
+    file.flush().await.map_err(|e| format!("刷新失败: {e}"))?;
+    tokio::fs::rename(&part, &target).await.map_err(|e| format!("保存失败: {e}"))?;
+    emit_progress(&app, &file_name, downloaded, total, "completed", started_at);
+    Ok(file_name)
+}
+
+
+#[tauri::command]
+fn cancel_download(state: State<'_, AppState>) -> Result<(), String> {
+    state.cancel_download.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+fn check_cancel(state: &AppState) -> bool {
+    state.cancel_download.load(Ordering::SeqCst)
+}
+
+fn emit_progress(app: &AppHandle, file_name: &str, downloaded: u64, total: u64, status: &str, started_at: u64) {
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        .saturating_sub(started_at)
+        .max(1);
+    let speed_mbps = (downloaded as f64 / 1_048_576.0) / elapsed as f64;
     let _ = app.emit("download-progress", DownloadProgress {
-        file_name: file_name.clone(),
+        file_name: file_name.to_string(),
         downloaded,
         total,
-        percent: 100.0,
-        status: "completed".into(),
+        percent: if total > 0 { downloaded as f64 / total as f64 * 100.0 } else { 0.0 },
+        status: status.to_string(),
+        speed_mbps,
+        started_at: Some(started_at),
     });
-    Ok(file_name)
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RegistryExtension {
+    id: String,
+    name: String,
+    version: String,
+    description: String,
+    author: String,
+    runtime: String,
+    download_url: String,
+    sha256: String,
+    size: u64,
+    #[serde(default)]
+    homepage: String,
+    #[serde(default)]
+    permissions: Vec<String>,
+    #[serde(default)]
+    verified: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExtensionRegistry {
+    schema_version: u32,
+    extensions: Vec<RegistryExtension>,
+}
+
+fn validate_https_url(value: &str) -> Result<reqwest::Url, String> {
+    let url = reqwest::Url::parse(value).map_err(|error| format!("无效地址: {error}"))?;
+    if url.scheme() != "https" {
+        return Err("扩展注册表和安装包必须使用 HTTPS".into());
+    }
+    let host = url.host_str().ok_or("地址缺少主机名")?;
+    if host.eq_ignore_ascii_case("localhost")
+        || host.ends_with(".localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(is_private_extension_host)
+    {
+        return Err("扩展注册表和安装包不能使用本机地址".into());
+    }
+    Ok(url)
+}
+
+fn is_private_extension_host(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(ip) => {
+            ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified()
+        }
+        std::net::IpAddr::V6(ip) => {
+            ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local() || ip.is_unspecified()
+        }
+    }
+}
+
+#[tauri::command]
+async fn fetch_extension_registry(registry_url: String) -> Result<Vec<RegistryExtension>, String> {
+    let url = validate_https_url(&registry_url)?;
+    let trusted_registry = registry_url == "https://raw.githubusercontent.com/zkonikishi/Astrore/main/registry/index.json";
+    let response = reqwest::Client::new()
+        .get(url)
+        .timeout(Duration::from_secs(20))
+        .header("User-Agent", "Astrore/0.2")
+        .send()
+        .await
+        .map_err(|error| format!("获取扩展注册表失败: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("扩展注册表返回错误: {error}"))?;
+    validate_https_url(response.url().as_str()).map_err(|_| "扩展注册表重定向到了不安全地址")?;
+    if response.content_length().unwrap_or(2 * 1024 * 1024 + 1) > 2 * 1024 * 1024 {
+        return Err("扩展注册表过大".into());
+    }
+    let registry_bytes = response
+        .bytes()
+        .await
+        .map_err(|error| format!("读取扩展注册表失败: {error}"))?;
+    let registry: ExtensionRegistry =
+        serde_json::from_slice(&registry_bytes).map_err(|error| format!("解析扩展注册表失败: {error}"))?;
+    if registry.schema_version != 1 {
+        return Err("不支持的扩展注册表版本".into());
+    }
+    Ok(registry
+        .extensions
+        .into_iter()
+        .map(|mut entry| {
+            entry.verified = trusted_registry && entry.verified;
+            entry
+        })
+        .filter(|entry| {
+            is_safe_extension_id(&entry.id)
+                && matches!(entry.runtime.as_str(), "wasi" | "external-mcp")
+                && entry.sha256.len() == 64
+                && entry.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+                && entry.size <= 25 * 1024 * 1024
+        })
+        .collect())
+}
+
+#[tauri::command]
+async fn install_registry_extension(
+    extension: RegistryExtension,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if !is_safe_extension_id(&extension.id)
+        || extension.sha256.len() != 64
+        || !extension.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("扩展元数据无效".into());
+    }
+    if extension.size == 0 || extension.size > 25 * 1024 * 1024 {
+        return Err("扩展安装包大小无效".into());
+    }
+    let url = validate_https_url(&extension.download_url)?;
+    let response = reqwest::Client::new()
+        .get(url)
+        .timeout(Duration::from_secs(60))
+        .header("User-Agent", "Astrore/0.2")
+        .send()
+        .await
+        .map_err(|error| format!("下载扩展失败: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("扩展下载返回错误: {error}"))?;
+    validate_https_url(response.url().as_str()).map_err(|_| "扩展安装包重定向到了不安全地址")?;
+    if response.content_length() != Some(extension.size) {
+        return Err("扩展安装包响应大小与注册表不一致".into());
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| format!("读取扩展安装包失败: {error}"))?;
+    if bytes.len() as u64 != extension.size {
+        return Err("扩展安装包大小与注册表不一致".into());
+    }
+    let checksum = format!("{:x}", Sha256::digest(&bytes));
+    if !checksum.eq_ignore_ascii_case(&extension.sha256) {
+        return Err("扩展安装包 SHA-256 校验失败".into());
+    }
+
+    let extensions_dir = dirs_next::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("astrore")
+        .join("extensions");
+    fs::create_dir_all(&extensions_dir).map_err(|error| format!("创建扩展目录失败: {error}"))?;
+    let staging = extensions_dir.join(format!(".install-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&staging).map_err(|error| format!("创建扩展暂存目录失败: {error}"))?;
+    let unpack_result = (|| -> Result<(), String> {
+        let decoder = flate2::read::GzDecoder::new(Cursor::new(bytes));
+        let mut archive = tar::Archive::new(decoder);
+        let mut expanded_size = 0u64;
+        let mut file_count = 0u32;
+        for entry in archive.entries().map_err(|error| format!("读取扩展安装包失败: {error}"))? {
+            let mut entry = entry.map_err(|error| format!("读取扩展文件失败: {error}"))?;
+            file_count += 1;
+            expanded_size = expanded_size.saturating_add(entry.size());
+            if file_count > 1_000 || expanded_size > 100 * 1024 * 1024 {
+                return Err("扩展安装包解压后过大".into());
+            }
+            let path = entry
+                .path()
+                .map_err(|error| format!("扩展文件路径无效: {error}"))?
+                .into_owned();
+            if path.is_absolute()
+                || path.components().any(|component| matches!(component, std::path::Component::ParentDir))
+            {
+                return Err("扩展安装包包含危险路径".into());
+            }
+            if !entry.header().entry_type().is_file() && !entry.header().entry_type().is_dir() {
+                return Err("扩展安装包包含不允许的链接或设备文件".into());
+            }
+            entry.unpack_in(&staging).map_err(|error| format!("解压扩展失败: {error}"))?;
+        }
+        let manifest: ExtensionManifest = serde_json::from_str(
+            &fs::read_to_string(staging.join("manifest.json"))
+                .map_err(|error| format!("扩展安装包缺少 manifest.json: {error}"))?,
+        )
+        .map_err(|error| format!("扩展清单无效: {error}"))?;
+        if manifest.id != extension.id
+            || manifest.version != extension.version
+            || manifest.runtime != extension.runtime
+            || manifest.permissions != extension.permissions
+        {
+            return Err("扩展清单与注册表元数据不一致".into());
+        }
+        Ok(())
+    })();
+    if let Err(error) = unpack_result {
+        let _ = fs::remove_dir_all(&staging);
+        return Err(error);
+    }
+
+    let target = extensions_dir.join(&extension.id);
+    let backup = extensions_dir.join(format!(".backup-{}", uuid::Uuid::new_v4()));
+    {
+        let mut manager = state.plugin_manager.lock().map_err(|_| "扩展管理器锁已损坏")?;
+        if let Some(manager) = manager.as_mut() {
+            manager.remove_extension(&extension.id);
+        }
+    }
+    if target.exists() {
+        fs::rename(&target, &backup).map_err(|error| format!("备份旧扩展失败: {error}"))?;
+    }
+    if let Err(error) = fs::rename(&staging, &target) {
+        if backup.exists() {
+            let _ = fs::rename(&backup, &target);
+        }
+        return Err(format!("安装扩展失败: {error}"));
+    }
+    if backup.exists() {
+        let _ = fs::remove_dir_all(backup);
+    }
+    write_extension_audit("install", &extension.id, &extension.version);
+    Ok(())
+}
+
+fn write_extension_audit(action: &str, extension_id: &str, detail: &str) {
+    let Some(data_dir) = dirs_next::data_dir() else { return };
+    let audit_dir = data_dir.join("astrore");
+    if fs::create_dir_all(&audit_dir).is_err() {
+        return;
+    }
+    let event = serde_json::json!({
+        "time": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|value| value.as_secs()).unwrap_or(0),
+        "action": action,
+        "extensionId": extension_id,
+        "detail": detail,
+    });
+    use std::io::Write;
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(audit_dir.join("extension-audit.jsonl")) {
+        let _ = writeln!(file, "{event}");
+    }
+}
+
+#[tauri::command]
+fn init_extension_manager(state: State<'_, AppState>) -> Result<(), String> {
+    let extensions_dir = dirs_next::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("astrore")
+        .join("extensions");
+    if !extensions_dir.exists() {
+        fs::create_dir_all(&extensions_dir).map_err(|e| format!("创建扩展目录失败: {e}"))?;
+    }
+    let mut pm = state.plugin_manager.lock().map_err(|_| "扩展管理器锁已损坏")?;
+    if pm.is_none() {
+        let manager = ExtensionManager::new(extensions_dir);
+        *pm = Some(manager);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn scan_extensions(state: State<'_, AppState>) -> Result<Vec<ExtensionInfo>, String> {
+    let mut pm = state.plugin_manager.lock().map_err(|_| "扩展管理器锁已损坏")?;
+    let pm = pm.as_mut().ok_or("扩展管理器未初始化")?;
+    let manifests = pm.scan_extensions();
+    let enabled_ids: Vec<String> = Vec::new();
+    let mut infos = Vec::new();
+    for m in manifests {
+        if pm.get_extension(&m.id).is_none() {
+            pm.register(m.clone());
+        }
+        if let Some(info) = pm.extension_info(&m.id, &enabled_ids) {
+            infos.push(info);
+        }
+    }
+    Ok(infos)
+}
+
+#[tauri::command]
+fn start_extension(extension_id: String, approved_permissions: Vec<String>, state: State<'_, AppState>) -> Result<Vec<McpTool>, String> {
+    let mut pm = state.plugin_manager.lock().map_err(|_| "扩展管理器锁已损坏")?;
+    let pm = pm.as_mut().ok_or("扩展管理器未初始化")?;
+    let manifest = pm.load_manifest(&extension_id)?;
+    pm.register(manifest);
+    let result = pm.start_extension(&extension_id, &approved_permissions);
+    write_extension_audit(if result.is_ok() { "start" } else { "start-failed" }, &extension_id, &approved_permissions.join(","));
+    result
+}
+
+#[tauri::command]
+fn stop_extension(extension_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    let mut pm = state.plugin_manager.lock().map_err(|_| "扩展管理器锁已损坏")?;
+    let pm = pm.as_mut().ok_or("扩展管理器未初始化")?;
+    pm.stop_extension(&extension_id);
+    write_extension_audit("stop", &extension_id, "");
+    Ok(())
+}
+
+#[tauri::command]
+fn call_extension_tool(
+    extension_id: String,
+    tool_name: String,
+    arguments: serde_json::Value,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let mut pm = state.plugin_manager.lock().map_err(|_| "扩展管理器锁已损坏")?;
+    let pm = pm.as_mut().ok_or("扩展管理器未初始化")?;
+    let result = pm.call_tool(&extension_id, &tool_name, arguments);
+    write_extension_audit(if result.is_ok() { "tool-call" } else { "tool-call-failed" }, &extension_id, &tool_name);
+    result
 }
 
 #[tauri::command]
@@ -1340,6 +1905,7 @@ fn platform_capabilities() -> serde_json::Value {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             check_eula,
@@ -1368,6 +1934,20 @@ pub fn run() {
             search_modrinth,
             get_modrinth_versions,
             download_plugin,
+            get_core_types,
+            list_java_releases,
+            download_java,
+            search_spiget,
+            download_spiget_plugin,
+            cancel_download,
+            init_extension_manager,
+            scan_extensions,
+            start_extension,
+            stop_extension,
+            call_extension_tool,
+            fetch_extension_registry,
+            install_registry_extension,
+            ai_chat,
             list_backups,
             create_backup,
             restore_backup,

@@ -548,6 +548,32 @@ async fn invoke(command: &str, args: Value, state: &AgentState) -> Result<Value,
             Ok(Value::Null)
         }
         "get_console" => Ok(json!(state.console.lock().await.iter().cloned().collect::<Vec<_>>())),
+        "ai_chat" => {
+            let request = args.get("request").ok_or("缺少 AI 请求")?;
+            let endpoint = request.get("endpoint").and_then(Value::as_str).ok_or("缺少 AI 接口地址")?;
+            let url = reqwest::Url::parse(endpoint).map_err(|error| format!("AI 接口地址无效: {error}"))?;
+            let host = url.host_str().ok_or("AI 接口地址缺少主机名")?;
+            if url.scheme() != "https" && !(url.scheme() == "http" && matches!(host, "127.0.0.1" | "localhost" | "::1")) {
+                return Err("AI 接口必须使用 HTTPS；本地模型可使用 localhost HTTP".into());
+            }
+            let mut call = reqwest::Client::new()
+                .post(url)
+                .timeout(std::time::Duration::from_secs(120))
+                .header("User-Agent", "Astrore-Agent/0.2")
+                .json(&json!({
+                "model": request.get("model").and_then(Value::as_str).ok_or("缺少模型名称")?,
+                "messages": request.get("messages").and_then(Value::as_array).ok_or("缺少对话内容")?,
+                "temperature": request.get("temperature").and_then(Value::as_f64).unwrap_or(0.7),
+                "max_tokens": request.get("maxTokens").and_then(Value::as_u64).unwrap_or(4096),
+            }));
+            if let Some(key) = request.get("apiKey").and_then(Value::as_str).filter(|key| !key.is_empty()) {
+                call = call.bearer_auth(key);
+            }
+            let response: Value = call.send().await.map_err(|error| format!("AI 请求失败: {error}"))?
+                .error_for_status().map_err(|error| format!("AI 接口返回错误: {error}"))?
+                .json().await.map_err(|error| format!("无法解析 AI 响应: {error}"))?;
+            Ok(json!(response["choices"][0]["message"]["content"].as_str().ok_or("AI 响应缺少内容")?))
+        }
         "list_directory" => list_directory(&args),
         "read_text_file" => {
             let root = root(&args)?;

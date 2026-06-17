@@ -52,7 +52,39 @@ export type PlayerLists = {
 };
 export type CoreInfo = { name: string; tag: string; recommend: boolean; mcVersions: string[] };
 export type BuildInfo = { coreVersion: string; updateTime: string };
-export type DownloadProgress = { fileName: string; downloaded: number; total: number; percent: number; status: string };
+export type DownloadProgress = { fileName: string; downloaded: number; total: number; percent: number; status: string; speedMbps?: number; startedAt?: number };
+
+export type McpTool = { name: string; description: string; inputSchema?: Record<string, unknown> };
+export type McpExtensionInfo = {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  author: string;
+  icon: string;
+  runtime: "wasi" | "external-mcp";
+  homepage: string;
+  permissions: string[];
+  highRisk: boolean;
+  enabled: boolean;
+  running: boolean;
+  tools: McpTool[];
+  error?: string;
+};
+export type RegistryExtension = {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  author: string;
+  runtime: "wasi" | "external-mcp";
+  downloadUrl: string;
+  sha256: string;
+  size: number;
+  homepage: string;
+  permissions: string[];
+  verified: boolean;
+};
 
 export type ServerMetrics = {
   cpuPercent: number;
@@ -99,6 +131,36 @@ export type AgentEvent =
   | { type: "console-history"; payload: string[] }
   | { type: "status"; payload: ServerStatus }
   | { type: "metrics"; payload: ServerMetrics };
+export type AiMessage = { role: "system" | "user" | "assistant"; content: string };
+export type AiRequest = { endpoint: string; apiKey: string; model: string; temperature?: number; maxTokens?: number; messages: AiMessage[] };
+
+
+export type JavaRelease = {
+  version: string;
+  major: number;
+  downloadUrl: string;
+  fileName: string;
+  sizeMb: number;
+};
+
+export type SpigetResource = {
+  id: number;
+  name: string;
+  tag: string;
+  description: string;
+  iconUrl: string;
+  downloads: number;
+  rating: number;
+  author: string;
+  version: string;
+};
+
+export type CoreTypeInfo = {
+  name: string;
+  label: string;
+  category: string;
+  recommend: boolean;
+};
 
 export const isTauriRuntime = () =>
   typeof (window as typeof window & { __TAURI_INTERNALS__?: { invoke?: unknown } })
@@ -332,6 +394,11 @@ export async function getConsole(): Promise<string[]> {
   return webInvoke("get_console");
 }
 
+export async function aiChat(request: AiRequest): Promise<string> {
+  if (isTauriRuntime()) return invoke("ai_chat", { request });
+  return webInvoke("ai_chat", { request });
+}
+
 export async function searchModrinth(query: string, kind: string): Promise<PluginInfo[]> {
   if (isTauriRuntime()) return invoke("search_modrinth", { query, kind });
   return webInvoke("search_modrinth", { query, kind });
@@ -340,6 +407,46 @@ export async function searchModrinth(query: string, kind: string): Promise<Plugi
 export async function getModrinthVersions(projectId: string): Promise<PluginVersion[]> {
   if (isTauriRuntime()) return invoke("get_modrinth_versions", { projectId });
   return webInvoke("get_modrinth_versions", { projectId });
+}
+
+
+export async function getCoreTypes(): Promise<CoreTypeInfo[]> {
+  if (isTauriRuntime()) return invoke("get_core_types");
+  return [];
+}
+
+export async function listJavaReleases(): Promise<JavaRelease[]> {
+  if (isTauriRuntime()) return invoke("list_java_releases");
+  return [];
+}
+
+export async function downloadJava(downloadUrl: string, fileName: string): Promise<string> {
+  if (isTauriRuntime()) return invoke("download_java", { downloadUrl, fileName });
+  return "";
+}
+
+export async function selectDownloadPath(defaultName: string): Promise<string | null> {
+  if (!isTauriRuntime()) return null;
+  try {
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    return await save({ defaultPath: defaultName, title: "保存下载文件" });
+  } catch {
+    return null;
+  }
+}
+
+export async function searchSpiget(query: string): Promise<SpigetResource[]> {
+  if (isTauriRuntime()) return invoke("search_spiget", { query });
+  return [];
+}
+
+export async function cancelDownload(): Promise<void> {
+  if (isTauriRuntime()) return invoke("cancel_download");
+}
+
+export async function downloadSpigetPlugin(instancePath: string, resourceId: number, fileName: string): Promise<string> {
+  if (isTauriRuntime()) return invoke("download_spiget_plugin", { instancePath, resourceId, fileName });
+  return "";
 }
 
 export async function downloadPlugin(instancePath: string, downloadUrl: string, fileName: string, kind: string): Promise<string> {
@@ -365,4 +472,39 @@ export async function restoreBackup(instancePath: string, name: string): Promise
 export async function deleteBackup(instancePath: string, name: string): Promise<void> {
   if (isTauriRuntime()) return invoke("delete_backup", { instancePath, name });
   return webInvoke("delete_backup", { instancePath, name });
+}
+
+export async function initExtensionManager(): Promise<void> {
+  if (isTauriRuntime()) return invoke("init_extension_manager");
+}
+
+export async function scanExtensions(): Promise<McpExtensionInfo[]> {
+  if (isTauriRuntime()) return invoke("scan_extensions");
+  return [];
+}
+
+export async function startExtension(extensionId: string, approvedPermissions: string[]): Promise<McpTool[]> {
+  if (isTauriRuntime()) return invoke("start_extension", { extensionId, approvedPermissions });
+  return [];
+}
+
+export async function stopExtension(extensionId: string): Promise<void> {
+  if (isTauriRuntime()) return invoke("stop_extension", { extensionId });
+}
+
+export async function callExtensionTool(extensionId: string, toolName: string, args: Record<string, unknown>): Promise<unknown> {
+  if (isTauriRuntime()) return invoke("call_extension_tool", { extensionId, toolName, arguments: args });
+  return null;
+}
+
+export async function fetchExtensionRegistry(registryUrl: string): Promise<RegistryExtension[]> {
+  if (isTauriRuntime()) return invoke("fetch_extension_registry", { registryUrl });
+  const response = await fetch(registryUrl);
+  if (!response.ok) throw new Error(`扩展注册表请求失败：${response.status}`);
+  return (await response.json()).extensions ?? [];
+}
+
+export async function installRegistryExtension(extension: RegistryExtension): Promise<void> {
+  if (isTauriRuntime()) return invoke("install_registry_extension", { extension });
+  throw new Error("网页端不能安装本地扩展");
 }

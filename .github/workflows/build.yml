@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -55,6 +55,9 @@ jobs:
       - name: Check frontend
         run: npm run build
 
+      - name: Validate extension registry
+        run: npm run registry:check
+
       - name: Generate platform icons
         run: npm run tauri icon public/astrore-icon.png
 
@@ -94,3 +97,21 @@ jobs:
             Astrore-Agent-*.zip
             Astrore-Agent-*.tar.gz
           if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Astrore ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            src-tauri/target/release/bundle/**/*.msi
+            src-tauri/target/release/bundle/**/*.exe
+            src-tauri/target/release/bundle/**/*.dmg
+            src-tauri/target/release/bundle/**/*.app.tar.gz
+            src-tauri/target/release/bundle/**/*.deb
+            src-tauri/target/release/bundle/**/*.AppImage
+            Astrore-Agent-*.zip
+            Astrore-Agent-*.tar.gz
