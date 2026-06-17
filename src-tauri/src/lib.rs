@@ -1569,7 +1569,7 @@ fn cancel_download(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
-fn check_cancel(state: &AppState) -> bool {
+fn check_cancel(state: tauri::State<'_, AppState>) -> bool {
     state.cancel_download.load(Ordering::SeqCst)
 }
 
