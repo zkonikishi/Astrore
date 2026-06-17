@@ -7,7 +7,7 @@
 set -euo pipefail
 
 # ==================== 配置 ====================
-GITHUB_REPO="OwOnya/astrore"                     # GitHub 仓库 (请替换为实际仓库)
+GITHUB_REPO="zkonikishi/Astrore"                # GitHub 仓库
 INSTALL_DIR="${INSTALL_DIR:-/opt/astrore-agent}"  # 安装目录
 BIND_PORT="${BIND_PORT:-1421}"                    # 监听端口
 BIND_HOST="${BIND_HOST:-127.0.0.1}"               # 监听地址

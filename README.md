@@ -30,7 +30,7 @@ Agent 启动后访问 `http://127.0.0.1:1421` 即可进入网页控制台。Agen
 在 Linux 服务器上通过单条命令完成部署：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/OwOnya/astrore/main/deploy/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/zkonikishi/Astrore/main/deploy/install.sh | sudo bash
 ```
 
 可选参数：
@@ -42,12 +42,12 @@ curl -fsSL https://raw.githubusercontent.com/OwOnya/astrore/main/deploy/install.
 | `--port 1421` | 监听端口 | `1421` |
 | `--host 0.0.0.0` | 监听地址 | `127.0.0.1` |
 | `--token YOUR_TOKEN` | 访问令牌 | 自动生成随机令牌 |
-| `--repo yourname/astrore` | GitHub 仓库 | `OwOnya/astrore` |
+| `--repo yourname/astrore` | GitHub 仓库 | `zkonikishi/Astrore` |
 
 示例：指定版本并允许局域网访问：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/OwOnya/astrore/main/deploy/install.sh | sudo bash -s -- --version v0.2.0 --host 0.0.0.0 --token my-secret-token
+curl -fsSL https://raw.githubusercontent.com/zkonikishi/Astrore/main/deploy/install.sh | sudo bash -s -- --version v0.2.0 --host 0.0.0.0 --token my-secret-token
 ```
 
 脚本会自动完成：
@@ -125,7 +125,7 @@ ASTRORE_TOKEN='replace-with-a-long-random-token' \
 
 `.github/workflows/build.yml` 会构建并上传：
 
-- Windows：NSIS、MSI、`Astrore-Agent-Windows.zip`
+- Windows：便携版 `Astrore_x.x.x_x64-portable.zip`、`Astrore-Agent-Windows.zip`
 - Linux：DEB、AppImage、`Astrore-Agent-Linux.tar.gz`
 - macOS：App、DMG、`Astrore-Agent-macOS.tar.gz`
 
