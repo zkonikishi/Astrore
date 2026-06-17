@@ -19,7 +19,7 @@ jobs:
         include:
           - platform: windows-latest
             artifact: Astrore-Windows
-            bundles: nsis,msi
+            bundles: ""
           - platform: ubuntu-22.04
             artifact: Astrore-Linux
             bundles: deb,appimage
@@ -61,19 +61,24 @@ jobs:
       - name: Generate platform icons
         run: npm run tauri icon public/astrore-icon.png
 
-      - name: Build Tauri bundles
+      - name: Build Tauri (Windows portable only)
+        if: matrix.platform == 'windows-latest'
+        run: npm run tauri build -- --bundles ""
+        continue-on-error: true
+
+      - name: Build Tauri (Windows exe only)
+        if: matrix.platform == 'windows-latest'
+        run: cargo build --manifest-path src-tauri/Cargo.toml --release
+
+      - name: Build Tauri bundles (Linux/macOS)
+        if: matrix.platform != 'windows-latest'
         run: npm run tauri build -- --bundles ${{ matrix.bundles }}
 
-      - name: Normalize Windows desktop packages
+      - name: Package Windows portable
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          Get-ChildItem src-tauri/target/release/bundle -Recurse -Filter "*_en-US.msi" | ForEach-Object {
-            $target = Join-Path $_.DirectoryName ($_.Name -replace "_en-US\.msi$", ".msi")
-            Move-Item -LiteralPath $_.FullName -Destination $target -Force
-          }
-
           New-Item -ItemType Directory -Force portable-package | Out-Null
           Copy-Item src-tauri/target/release/astrore.exe portable-package/Astrore.exe
           @"
@@ -113,7 +118,7 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: |
-            src-tauri/target/release/bundle/**
+            ${{ matrix.platform != 'windows-latest' && 'src-tauri/target/release/bundle/**' || '' }}
             Astrore_*_x64-portable.zip
             Astrore-Agent-*.zip
             Astrore-Agent-*.tar.gz
@@ -128,8 +133,6 @@ jobs:
           prerelease: false
           generate_release_notes: true
           files: |
-            src-tauri/target/release/bundle/**/*.msi
-            src-tauri/target/release/bundle/**/*.exe
             src-tauri/target/release/bundle/**/*.dmg
             src-tauri/target/release/bundle/**/*.app.tar.gz
             src-tauri/target/release/bundle/**/*.deb
