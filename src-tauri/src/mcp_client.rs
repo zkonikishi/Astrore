@@ -7,6 +7,20 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(windows)]
+fn hide_subprocess_window(command: &mut Command) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn hide_subprocess_window(_: &mut Command) {}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtensionManifest {
@@ -120,6 +134,7 @@ impl McpClient {
         }
         let entry = self.manifest.entry.as_ref().ok_or("外部 MCP 扩展缺少启动入口")?;
         let mut cmd = Command::new(&entry.command);
+        hide_subprocess_window(&mut cmd);
         cmd.args(&entry.args);
         cmd.current_dir(&self.working_dir);
         cmd.env_clear();

@@ -24,6 +24,17 @@ use tokio::{
 };
 use tower_http::{cors::CorsLayer, services::ServeDir};
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(windows)]
+fn hide_subprocess_window(command: &mut Command) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn hide_subprocess_window(_: &mut Command) {}
+
 #[derive(Clone)]
 struct AgentState {
     token: String,
@@ -384,6 +395,7 @@ async fn spawn_server(config: InstanceConfig, state: &AgentState) -> Result<Valu
     let root = PathBuf::from(&config.instance_path).canonicalize().map_err(|error| error.to_string())?;
     if !root.join(&config.server_jar).is_file() { return Err("服务端核心不存在".into()); }
     let mut command = Command::new(if config.java_path.trim().is_empty() { "java" } else { &config.java_path });
+    hide_subprocess_window(&mut command);
     command.current_dir(root)
         .arg(format!("-Xms{}M", config.min_memory_mb))
         .arg(format!("-Xmx{}M", config.max_memory_mb))

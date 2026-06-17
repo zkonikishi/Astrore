@@ -33,7 +33,7 @@ import {
   WifiOff,
   X,
 } from "lucide-react";
-import { BackupView, CoreTypeView, ExtensionStoreView, FileManagerView, JavaDownloadView, PermissionsView, PluginConfigView, PluginMarketView, PluginsManagerView, PropertiesView, SpigetPluginView } from "./ManagementViews";
+import { BackupView, CoreTypeView, ExtensionStoreView, JavaDownloadView, PermissionsView, PluginConfigView, PluginMarketView, PluginsManagerView, PropertiesView } from "./ManagementViews";
 import { AiAssistant } from "./AiAssistant";
 import {
   acceptEula,
@@ -59,7 +59,11 @@ import {
 } from "./bridge";
 import { highlightLine } from "./consoleHighlighter";
 
-type Tab = "overview" | "console" | "ai" | "download" | "files" | "backups" | "plugins" | "plugin-config" | "extensions" | "properties" | "permissions" | "settings" | "about" | "software";
+type Tab = "overview" | "control" | "instance" | "files" | "software" | "download" | "extensions" | "about";
+type InstanceTab = "runtime" | "properties" | "rules" | "optimization";
+type FilesTab = "plugins" | "mods" | "backups";
+type SoftwareTab = "basic" | "ai";
+type DownloadTabKey = "java" | "core" | "plugins" | "mods";
 
 const DEFAULT_INSTANCE: InstanceConfig = {
   name: "我的世界服务器",
@@ -74,6 +78,10 @@ const DEFAULT_INSTANCE: InstanceConfig = {
 
 function App() {
   const [tab, setTab] = useState<Tab>("overview");
+  const [instanceTab, setInstanceTab] = useState<InstanceTab>("runtime");
+  const [filesTab, setFilesTab] = useState<FilesTab>("plugins");
+  const [softwareTab, setSoftwareTab] = useState<SoftwareTab>("basic");
+  const [downloadTab, setDownloadTab] = useState<DownloadTabKey>("java");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [instanceMenuOpen, setInstanceMenuOpen] = useState(false);
   const [instances, setInstances] = useState<InstanceConfig[]>([DEFAULT_INSTANCE]);
@@ -279,19 +287,13 @@ function App() {
     () =>
       ({
         overview: "运行概览",
-        console: "实时控制台",
-        ai: "AI 运维助手",
-        download: "下载中心",
+        control: "控制面板",
+        instance: "实例配置",
         files: "文件管理",
-        backups: "备份管理",
-        plugins: "插件与模组",
-        "plugin-config": "插件配置",
-        extensions: "扩展商店",
-        properties: "服务端配置",
-        permissions: "玩家与权限",
-        settings: "实例设置",
-        about: "关于 Astrore",
         software: "软件设置",
+        download: "下载中心",
+        extensions: "扩展商店",
+        about: "关于 Astrore",
       })[tab],
     [tab],
   );
@@ -328,10 +330,10 @@ function App() {
     }
   };
 
-  const sendCommand = async () => {
-    if (!command.trim()) return;
+  const sendCommand = async (override?: string) => {
+    const value = (override ?? command).trim();
+    if (!value) return;
     if (!agentAvailable) return setError("Agent 未连接，无法发送命令");
-    const value = command.trim();
     try {
       await sendServerCommand(value);
       setConsoleLines((current) => [...current, `> ${value}`]);
@@ -395,7 +397,8 @@ function App() {
     setInstanceConfig(next[index]);
     persistInstances(next, index);
     setInstanceMenuOpen(false);
-    setTab("settings");
+    setTab("instance");
+    setInstanceTab("runtime");
   };
 
   const deleteActiveInstance = () => {
@@ -414,11 +417,11 @@ function App() {
   const searchNavigate = () => {
     const query = searchQuery.trim().toLowerCase();
     const routes: Array<[string[], Tab]> = [
-      [["控制台", "命令", "console"], "console"], [["下载", "核心", "market"], "download"],
-      [["文件", "file"], "files"], [["备份", "backup"], "backups"], [["插件", "模组", "mod", "plugin"], "plugins"],
-      [["配置编辑", "插件配置", "config"], "plugin-config"],
-      [["AI", "助手", "诊断", "报错分析"], "ai"],
-      [["配置", "properties"], "properties"], [["玩家", "权限", "白名单", "op"], "permissions"], [["设置", "实例"], "settings"],
+      [["控制台", "命令", "console", "面板"], "control"], [["下载", "核心", "market", "java"], "download"],
+      [["文件", "备份", "backup", "插件", "模组", "mod", "plugin"], "files"],
+      [["AI", "助手", "诊断", "报错分析", "厂商"], "software"],
+      [["配置", "properties", "玩家", "权限", "白名单", "op", "实例"], "instance"],
+      [["商店", "扩展"], "extensions"], [["关于", "readme"], "about"],
     ];
     const result = routes.find(([keywords]) => keywords.some(keyword => query.includes(keyword)));
     if (result) {
@@ -464,18 +467,14 @@ function App() {
         </div>
 
         <nav>
-          <NavButton icon={<LayoutDashboard />} label="运行概览" active={tab === "overview"} onClick={() => setTab("overview")} />
-          <NavButton icon={<TerminalSquare />} label="实时控制台" active={tab === "console"} onClick={() => setTab("console")} />
-          <NavButton icon={<Bot />} label="AI 运维助手" active={tab === "ai"} onClick={() => setTab("ai")} />
-          <NavButton icon={<Download />} label="下载中心" active={tab === "download"} onClick={() => setTab("download")} />
+          <NavButton icon={<LayoutDashboard />} label="运行概况" active={tab === "overview"} onClick={() => setTab("overview")} />
+          <NavButton icon={<TerminalSquare />} label="控制面板" active={tab === "control"} onClick={() => setTab("control")} />
+          <NavButton icon={<Server />} label="实例配置" active={tab === "instance"} onClick={() => setTab("instance")} />
           <NavButton icon={<Folder />} label="文件管理" active={tab === "files"} onClick={() => setTab("files")} />
-          <NavButton icon={<Database />} label="备份管理" active={tab === "backups"} onClick={() => setTab("backups")} />
-          <NavButton icon={<Plug />} label="插件与模组" active={tab === "plugins"} onClick={() => setTab("plugins")} />
-          <NavButton icon={<FileCog />} label="插件配置" active={tab === "plugin-config"} onClick={() => setTab("plugin-config")} />
+          <NavButton icon={<Settings />} label="软件设置" active={tab === "software"} onClick={() => setTab("software")} />
+          <NavButton icon={<Download />} label="下载中心" active={tab === "download"} onClick={() => setTab("download")} />
           <NavButton icon={<Puzzle />} label="扩展商店" active={tab === "extensions"} onClick={() => setTab("extensions")} />
-          <NavButton icon={<FileText />} label="服务端配置" active={tab === "properties"} onClick={() => setTab("properties")} />
-          <NavButton icon={<ShieldCheck />} label="玩家与权限" active={tab === "permissions"} onClick={() => setTab("permissions")} />
-          <NavButton icon={<Settings />} label="实例设置" active={tab === "settings"} onClick={() => setTab("settings")} />
+          <NavButton icon={<Info />} label="关于我们" active={tab === "about"} onClick={() => setTab("about")} />
         </nav>
 
         <div className="sidebar-bottom">
@@ -487,10 +486,6 @@ function App() {
             </div>
             {!isTauriRuntime() && <button className="agent-reconnect" onClick={reconnectAgent} disabled={agentConnection.status === "connecting"} title="重新连接"><RefreshCw size={14} /></button>}
           </div>
-          <nav>
-            <NavButton icon={<Settings />} label="软件设置" active={tab === "software"} onClick={() => setTab("software")} />
-            <NavButton icon={<Info />} label="关于" active={tab === "about"} onClick={() => setTab("about")} />
-          </nav>
           <div className="profile">
             <span>OW</span>
             <div><strong>管理员</strong><small>本地账户</small></div>
@@ -555,7 +550,7 @@ function App() {
 
               <section className="dashboard-grid">
                 <div className="panel console-panel">
-                  <PanelHeader icon={<TerminalSquare />} title="控制台" action="打开完整控制台" onAction={() => setTab("console")} />
+                  <PanelHeader icon={<TerminalSquare />} title="控制台" action="打开控制面板" onAction={() => setTab("control")} />
                   <Console lines={consoleLines} command={command} setCommand={setCommand} sendCommand={sendCommand} />
                 </div>
                 <div className="panel">
@@ -582,7 +577,7 @@ function App() {
                   </div>
                 </div>
                 <div className="panel">
-                  <PanelHeader icon={<HardDrive />} title="存储空间" action="管理文件" onAction={() => setTab("files")} />
+                  <PanelHeader icon={<HardDrive />} title="存储空间" action="管理文件" onAction={() => { setTab("files"); setFilesTab("backups"); }} />
                   <div className="storage-ring"><strong>{sysMetrics.diskFreeGb ? sysMetrics.diskFreeGb.toFixed(1) : "--"}</strong><span>GB 可用</span></div>
                   <div className="storage-info">
                     <div><span>实例目录</span><strong>{instanceConfig.instancePath || "未配置"}</strong></div>
@@ -594,19 +589,13 @@ function App() {
             </>
           )}
 
-          {tab === "console" && <FullConsole lines={consoleLines} command={command} setCommand={setCommand} sendCommand={sendCommand} />}
-          {tab === "ai" && <AiAssistant instance={instanceConfig} running={running} metrics={sysMetrics} consoleLines={consoleLines} onError={setError} />}
-          {tab === "download" && <DownloadTab instancePath={instanceConfig.instancePath} onError={setError} />}
-          {tab === "files" && <FileManagerView instancePath={instanceConfig.instancePath} onError={setError} />}
-          {tab === "backups" && <BackupView instancePath={instanceConfig.instancePath} onError={setError} />}
-          {tab === "plugins" && <PluginsManagerView instancePath={instanceConfig.instancePath} onError={setError} />}
-          {tab === "plugin-config" && <PluginConfigView instancePath={instanceConfig.instancePath} onError={setError} />}
+          {tab === "control" && <ControlPanel lines={consoleLines} command={command} setCommand={setCommand} sendCommand={sendCommand} running={running} start={start} stop={stop} forceStop={forceStop} metrics={sysMetrics} instance={instanceConfig} onError={setError} />}
+          {tab === "download" && <DownloadTab subTab={downloadTab} setSubTab={setDownloadTab} instancePath={instanceConfig.instancePath} onError={setError} />}
+          {tab === "files" && <FilesHub subTab={filesTab} setSubTab={setFilesTab} instancePath={instanceConfig.instancePath} onError={setError} />}
           {tab === "extensions" && <ExtensionStoreView onError={setError} />}
-          {tab === "properties" && <PropertiesView instancePath={instanceConfig.instancePath} onError={setError} />}
-          {tab === "permissions" && <PermissionsView instancePath={instanceConfig.instancePath} onError={setError} />}
-          {tab === "settings" && <SettingsView mode={mode} config={instanceConfig} onChange={setInstanceConfig} onSave={saveInstance} autoRestart={autoRestart} onAutoRestartChange={(c) => { setAutoRestart(c); localStorage.setItem("astrore.autoRestart", JSON.stringify(c)); setAutoRestartConfig(c).catch(reason => setError(String(reason))); }} />}
+          {tab === "instance" && <InstanceConfigView subTab={instanceTab} setSubTab={setInstanceTab} mode={mode} config={instanceConfig} onChange={setInstanceConfig} onSave={saveInstance} instancePath={instanceConfig.instancePath} onError={setError} autoRestart={autoRestart} onAutoRestartChange={(c) => { setAutoRestart(c); localStorage.setItem("astrore.autoRestart", JSON.stringify(c)); setAutoRestartConfig(c).catch(reason => setError(String(reason))); }} />}
           {tab === "about" && <AboutView />}
-          {tab === "software" && <SoftwareSettingsView autoRestart={autoRestart} onAutoRestartChange={(c) => { setAutoRestart(c); localStorage.setItem("astrore.autoRestart", JSON.stringify(c)); setAutoRestartConfig(c).catch(reason => setError(String(reason))); }} />}
+          {tab === "software" && <SoftwareSettingsView subTab={softwareTab} setSubTab={setSoftwareTab} autoRestart={autoRestart} onAutoRestartChange={(c) => { setAutoRestart(c); localStorage.setItem("astrore.autoRestart", JSON.stringify(c)); setAutoRestartConfig(c).catch(reason => setError(String(reason))); }} />}
         </div>
       </main>
 
@@ -620,6 +609,10 @@ function NavButton({ icon, label, active, onClick }: { icon: React.ReactNode; la
   return <button className={active ? "nav-item active" : "nav-item"} onClick={onClick}>{icon}<span>{label}</span></button>;
 }
 
+function TopTabs<T extends string>({ tabs, value, onChange }: { tabs: Array<{ key: T; label: string }>; value: T; onChange: (key: T) => void }) {
+  return <div className="top-tabs">{tabs.map(item => <button key={item.key} className={value === item.key ? "active" : ""} onClick={() => onChange(item.key)}>{item.label}</button>)}</div>;
+}
+
 function Metric({ icon, label, value, detail, progress, tone }: { icon: React.ReactNode; label: string; value: string; detail: string; progress: number; tone: string }) {
   return <div className="metric"><div className={`metric-icon ${tone}`}>{icon}</div><div className="metric-copy"><span>{label}</span><strong>{value}</strong><small>{detail}</small></div><div className="meter"><i className={tone} style={{ width: `${progress}%` }} /></div></div>;
 }
@@ -628,8 +621,61 @@ function PanelHeader({ icon, title, action, onAction }: { icon: React.ReactNode;
   return <div className="panel-header"><div>{icon}<strong>{title}</strong></div>{onAction ? <button onClick={onAction}>{action}</button> : <span>{action}</span>}</div>;
 }
 
-function Console({ lines, command, setCommand, sendCommand, maxLines = 6 }: { lines: string[]; command: string; setCommand: (value: string) => void; sendCommand: () => void; maxLines?: number }) {
-  return <><div className="console">{lines.slice(-maxLines).map((line, index) => <code key={index} dangerouslySetInnerHTML={{ __html: highlightLine(line) }} />)}</div><div className="command-bar"><Command size={16} /><input value={command} onChange={(e) => setCommand(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendCommand()} placeholder="输入服务端命令" /><button onClick={sendCommand}>发送</button></div></>;
+function Console({ lines, command, setCommand, sendCommand, maxLines = 6 }: { lines: string[]; command: string; setCommand: (value: string) => void; sendCommand: (override?: string) => void; maxLines?: number }) {
+  return <><div className="console">{lines.slice(-maxLines).map((line, index) => <code key={index} dangerouslySetInnerHTML={{ __html: highlightLine(line) }} />)}</div><div className="command-bar"><Command size={16} /><input value={command} onChange={(e) => setCommand(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendCommand()} placeholder="输入服务端命令" /><button onClick={() => sendCommand()}>发送</button></div></>;
+}
+
+function ControlPanel({ lines, command, setCommand, sendCommand, running, start, stop, forceStop, metrics, instance, onError }: Parameters<typeof Console>[0] & { running: boolean; start: () => void; stop: () => void; forceStop: () => void; metrics: ServerMetrics; instance: InstanceConfig; onError: (message: string) => void }) {
+  const [prefix, setPrefix] = useState("/");
+  const [colorText, setColorText] = useState(true);
+  const [followScroll, setFollowScroll] = useState(true);
+  const [showPlayers, setShowPlayers] = useState(true);
+  const [crashRestart, setCrashRestart] = useState(() => localStorage.getItem("astrore.control.crashRestart") === "true");
+  const sendWithPrefix = () => {
+    const value = command.trim();
+    if (!value) return;
+    sendCommand(prefix === "/" && value.startsWith("/") ? value.slice(1) : `${prefix === "/" ? "" : prefix}${value}`);
+  };
+  const players = metrics.playerList.length ? metrics.playerList : [];
+  return <section className="control-panel-grid">
+    <div className="panel control-console-panel">
+      <div className="control-console-title">
+        <div><TerminalSquare /><strong>服务端控制台</strong></div>
+        <span>控制台配色 · {running ? "运行中" : "未启动"}</span>
+      </div>
+      <div className={colorText ? "console console-light colored" : "console console-light"}>
+        {lines.slice(-500).map((line, index) => colorText ? <code key={index} dangerouslySetInnerHTML={{ __html: highlightLine(line) }} /> : <code key={index}>{line}</code>)}
+      </div>
+      <div className="control-command-row">
+        <select value={prefix} onChange={event => setPrefix(event.target.value)}>
+          <option value="/">/</option>
+          <option value="">无前缀</option>
+          <option value="say ">say</option>
+          <option value="op ">op</option>
+        </select>
+        <input value={command} onChange={(e) => setCommand(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendWithPrefix()} placeholder="将命令发送至服务端，方向键可以选择已发送的命令，回车快速发送" />
+        <button className="primary" onClick={sendWithPrefix}>发送 (Enter)</button>
+      </div>
+      <div className="control-actions-row">
+        <button className="secondary" disabled={running} onClick={start}>启动服务端</button>
+        <button className="secondary" disabled={!running} onClick={stop}>关闭服务端</button>
+        <button className="secondary" disabled={!running} onClick={async () => { await stop(); window.setTimeout(start, 1800); }}>重启服务端</button>
+        <button className="danger" disabled={!running} onClick={forceStop}>强制关闭服务端</button>
+        <label><input type="checkbox" checked={colorText} onChange={e => setColorText(e.target.checked)} />文本上色</label>
+        <label><input type="checkbox" checked={followScroll} onChange={e => setFollowScroll(e.target.checked)} />跟随滚动</label>
+        <label><input type="checkbox" checked={showPlayers} onChange={e => setShowPlayers(e.target.checked)} />玩家列表</label>
+        <label><input type="checkbox" checked={crashRestart} onChange={e => { setCrashRestart(e.target.checked); localStorage.setItem("astrore.control.crashRestart", String(e.target.checked)); }} />崩溃重启</label>
+      </div>
+      <div className="control-status-bar"><span>Tips: {running ? "服务端正在运行，输入 list 可刷新玩家列表。" : "点击启动服务端，首次启动会弹出 EULA 确认。"}</span><span>CPU.{metrics.cpuPercent.toFixed(1)}%</span><span>RAM.{metrics.memoryMaxMb > 0 ? Math.min(100, metrics.memoryMb / metrics.memoryMaxMb * 100).toFixed(0) : "0"}%</span></div>
+    </div>
+    <aside className="control-side">
+      {showPlayers && <div className="panel player-table-panel">
+        <div className="player-table-head"><strong>玩家名称</strong><strong>IP地址</strong></div>
+        <div className="player-table-body">{players.length ? players.map(player => <div key={player}><span>{player}</span><span>--</span></div>) : <div><span>暂无在线玩家</span><span>--</span></div>}</div>
+      </div>}
+      <AiAssistant instance={instance} running={running} metrics={metrics} consoleLines={lines} onError={onError} />
+    </aside>
+  </section>;
 }
 
 function FullConsole(props: Parameters<typeof Console>[0]) {
@@ -661,39 +707,90 @@ function FullConsole(props: Parameters<typeof Console>[0]) {
   </section>;
 }
 
-function SettingsView({ mode, config, onChange, onSave, autoRestart, onAutoRestartChange }: { mode: string; config: InstanceConfig; onChange: (config: InstanceConfig) => void; onSave: () => void; autoRestart: AutoRestartConfig; onAutoRestartChange: (config: AutoRestartConfig) => void }) {
+function InstanceConfigView({ subTab, setSubTab, mode, config, onChange, onSave, instancePath, onError, autoRestart, onAutoRestartChange }: { subTab: InstanceTab; setSubTab: (tab: InstanceTab) => void; mode: string; config: InstanceConfig; onChange: (config: InstanceConfig) => void; onSave: () => void; instancePath: string; onError: (message: string) => void; autoRestart: AutoRestartConfig; onAutoRestartChange: (config: AutoRestartConfig) => void }) {
   const update = (value: Partial<InstanceConfig>) => onChange({ ...config, ...value });
-  const [subTab, setSubTab] = useState<"basic" | "restart">("basic");
-  return <section className="settings-layout"><div className="panel settings-nav"><button className={subTab === "basic" ? "active" : ""} onClick={() => setSubTab("basic")}><Server />实例基础</button><button className={subTab === "restart" ? "active" : ""} onClick={() => setSubTab("restart")}><RefreshCw />崩溃重启</button></div>
-    {subTab === "basic" ? (
-      <div className="panel settings-form"><PanelHeader icon={<Settings />} title="实例基础设置" action={mode} /><label>实例名称<input value={config.name} onChange={(event) => update({ name: event.target.value })} /></label><label>服务端目录<input value={config.instancePath} onChange={(event) => update({ instancePath: event.target.value })} placeholder="例如 D:\Minecraft\server" /></label><div className="form-grid"><label>最小内存（MB）<input type="number" min="256" value={config.minMemoryMb} onChange={(event) => update({ minMemoryMb: Number(event.target.value) })} /></label><label>最大内存（MB）<input type="number" min="256" value={config.maxMemoryMb} onChange={(event) => update({ maxMemoryMb: Number(event.target.value) })} /></label></div><label>Java 路径<input value={config.javaPath} onChange={(event) => update({ javaPath: event.target.value })} /></label><label>服务端核心<input value={config.serverJar} onChange={(event) => update({ serverJar: event.target.value })} /></label><label>JVM 参数<textarea value={config.javaArgs.join(" ")} onChange={(event) => update({ javaArgs: event.target.value.split(/\s+/).filter(Boolean) })} /></label><div className="form-actions"><button className="secondary" onClick={() => update({ javaPath: "java", serverJar: "server.jar", minMemoryMb: 2048, maxMemoryMb: 8192, javaArgs: ["-XX:+UseG1GC", "-XX:+ParallelRefProcEnabled"], serverArgs: ["nogui"] })}>恢复默认</button><button className="primary" onClick={onSave}>保存设置</button></div></div>
-    ) : (
-      <div className="panel settings-form"><PanelHeader icon={<RefreshCw />} title="崩溃自动重启" action={autoRestart.enabled ? "已启用" : "已禁用"} />
+  return <section className="hub-page">
+    <TopTabs<InstanceTab> value={subTab} onChange={setSubTab} tabs={[
+      { key: "runtime", label: "本体设置" },
+      { key: "properties", label: "server.properties 配置" },
+      { key: "rules", label: "服务器规则设置" },
+      { key: "optimization", label: "Paper 等端优化设置" },
+    ]} />
+    {subTab === "runtime" && <div className="instance-runtime-grid">
+      <div className="panel settings-form"><PanelHeader icon={<Settings />} title="本体设置" action={mode} />
+        <div className="fieldset-title">调用 Java</div>
+        <div className="inline-field-row"><select value={config.javaPath === "java" ? "default" : "custom"} onChange={event => update({ javaPath: event.target.value === "default" ? "java" : config.javaPath })}><option value="default">默认使用 [JAVA] 环境</option><option value="custom">自定义路径</option></select><button className="secondary" onClick={() => update({ javaPath: "java" })}>刷新</button><button className="secondary" onClick={() => update({ javaPath: prompt("Java 路径", config.javaPath) || config.javaPath })}>自定义路径</button></div>
+        <label>Java 路径<input value={config.javaPath} onChange={(event) => update({ javaPath: event.target.value })} /></label>
+        <div className="fieldset-title">软件窗口设置</div>
+        <div className="check-grid"><label><input type="checkbox" />窗口置顶</label><label><input type="checkbox" defaultChecked />启动时开服</label><label><input type="checkbox" />最小化到托盘</label><label><input type="checkbox" />同目录禁止多开</label></div>
+        <div className="fieldset-title">服务端编码设置</div>
+        <div className="check-grid"><label><input type="radio" name="display-encoding" defaultChecked />显示编码：系统默认</label><label><input type="radio" name="display-encoding" />UTF-8</label><label><input type="radio" name="send-encoding" defaultChecked />发送编码：系统默认</label><label><input type="radio" name="send-encoding" />UTF-8</label></div>
+        <div className="fieldset-title">服务端额外启动参数</div>
+        <label>JVM 参数<textarea value={config.javaArgs.join(" ")} onChange={(event) => update({ javaArgs: event.target.value.split(/\s+/).filter(Boolean) })} /></label>
+        <label>服务端参数<input value={config.serverArgs.join(" ")} onChange={(event) => update({ serverArgs: event.target.value.split(/\s+/).filter(Boolean) })} /></label>
+      </div>
+      <div className="panel settings-form"><PanelHeader icon={<Server />} title="服务端核心" action={config.serverJar || "未配置"} />
+        <label>实例名称<input value={config.name} onChange={(event) => update({ name: event.target.value })} /></label>
+        <label>服务端目录<input value={config.instancePath} onChange={(event) => update({ instancePath: event.target.value })} placeholder="例如 D:\Minecraft\server" /></label>
+        <label>服务端核心<input value={config.serverJar} onChange={(event) => update({ serverJar: event.target.value })} /></label>
+        <div className="fieldset-title">内存设置（0 为自动分配）</div>
+        <div className="form-grid"><label>最大内存<input type="number" min="0" value={config.maxMemoryMb} onChange={(event) => update({ maxMemoryMb: Number(event.target.value) })} /></label><label>最小内存<input type="number" min="0" value={config.minMemoryMb} onChange={(event) => update({ minMemoryMb: Number(event.target.value) })} /></label></div>
+        <div className="fieldset-title">关服超时强制结束</div>
+        <div className="setting-row"><div><span>崩溃自动重启</span><small>服务端意外退出时自动重新启动</small></div><input type="checkbox" checked={autoRestart.enabled} onChange={(e) => onAutoRestartChange({ ...autoRestart, enabled: e.target.checked })} /></div>
+        <div className="form-grid"><label>最大重启次数<input type="number" min={1} max={10} value={autoRestart.maxRestarts} onChange={(e) => onAutoRestartChange({ ...autoRestart, maxRestarts: Number(e.target.value) })} /></label><label>重启延迟（秒）<input type="number" min={1} max={60} value={autoRestart.restartDelaySecs} onChange={(e) => onAutoRestartChange({ ...autoRestart, restartDelaySecs: Number(e.target.value) })} /></label></div>
+        <label>自定义副标题<input placeholder="[灵工艺] 我的世界开服器 - 自定义副标题" /></label>
+        <div className="form-actions"><button className="secondary" onClick={() => update({ javaPath: "java", serverJar: "server.jar", minMemoryMb: 2048, maxMemoryMb: 8192, javaArgs: ["-XX:+UseG1GC", "-XX:+ParallelRefProcEnabled"], serverArgs: ["nogui"] })}>恢复默认</button><button className="primary" onClick={onSave}>保存设置</button></div>
+      </div>
+    </div>}
+    {subTab === "properties" && <PropertiesView instancePath={instancePath} onError={onError} />}
+    {subTab === "rules" && <PermissionsView instancePath={instancePath} onError={onError} />}
+    {subTab === "optimization" && <div className="panel settings-form"><PanelHeader icon={<Gauge />} title="Paper / Purpur 优化建议" action="配置模板" />
+      <div className="setting-row"><div><span>推荐使用 Aikar G1GC 参数</span><small>适合大多数 Paper/Folia/Purpur 服务端，保存后写入 JVM 参数。</small></div><button className="secondary" onClick={() => update({ javaArgs: ["-XX:+UseG1GC", "-XX:+ParallelRefProcEnabled", "-XX:MaxGCPauseMillis=200", "-XX:+UnlockExperimentalVMOptions", "-XX:+DisableExplicitGC"] })}>应用</button></div>
+      <div className="setting-row"><div><span>降低 entity-activation-range</span><small>后续会写入 paper-world-defaults.yml / spigot.yml。</small></div><input type="checkbox" /></div>
+      <div className="setting-row"><div><span>限制 hopper 检测频率</span><small>适合生电较多但不追求完全原版行为的服务器。</small></div><input type="checkbox" /></div>
+      <div className="setting-row"><div><span>启用 Paper 配置备份</span><small>改写优化项前保存原配置，避免误操作。</small></div><input type="checkbox" defaultChecked /></div>
+      <div className="form-actions"><button className="primary" onClick={onSave}>保存当前 JVM 参数</button></div>
+    </div>}
+  </section>;
+}
+
+function LegacyRestartPanel({ autoRestart, onAutoRestartChange }: { autoRestart: AutoRestartConfig; onAutoRestartChange: (config: AutoRestartConfig) => void }) {
+  return <div className="panel settings-form"><PanelHeader icon={<RefreshCw />} title="崩溃自动重启" action={autoRestart.enabled ? "已启用" : "已禁用"} />
         <div className="setting-row"><div><span>启用崩溃自动重启</span><small>服务端意外退出时自动重新启动</small></div><input type="checkbox" checked={autoRestart.enabled} onChange={(e) => onAutoRestartChange({ ...autoRestart, enabled: e.target.checked })} /></div>
         <label>最大重启次数<input type="number" min={1} max={10} value={autoRestart.maxRestarts} onChange={(e) => onAutoRestartChange({ ...autoRestart, maxRestarts: Number(e.target.value) })} /></label>
         <label>重启延迟（秒）<input type="number" min={1} max={60} value={autoRestart.restartDelaySecs} onChange={(e) => onAutoRestartChange({ ...autoRestart, restartDelaySecs: Number(e.target.value) })} /></label>
         <div className="form-actions"><button className="primary" onClick={() => { setAutoRestartConfig(autoRestart).catch(() => undefined); }}>保存</button></div>
-      </div>
-    )}
+      </div>;
+}
+
+function FilesHub({ subTab, setSubTab, instancePath, onError }: { subTab: FilesTab; setSubTab: (tab: FilesTab) => void; instancePath: string; onError: (msg: string) => void }) {
+  const [pluginMode, setPluginMode] = useState<"toggle" | "config">("toggle");
+  const [modMode, setModMode] = useState<"toggle" | "config">("toggle");
+  return <section className="hub-page">
+    <TopTabs<FilesTab> value={subTab} onChange={setSubTab} tabs={[
+      { key: "plugins", label: "插件管理" },
+      { key: "mods", label: "模组管理" },
+      { key: "backups", label: "文件备份管理" },
+    ]} />
+    {subTab === "plugins" && <div className="nested-tab-page"><div className="segmented"><button className={pluginMode === "toggle" ? "active" : ""} onClick={() => setPluginMode("toggle")}>插件启动</button><button className={pluginMode === "config" ? "active" : ""} onClick={() => setPluginMode("config")}>插件配置</button></div>{pluginMode === "toggle" ? <PluginsManagerView kind="plugins" instancePath={instancePath} onError={onError} /> : <PluginConfigView kind="plugins" instancePath={instancePath} onError={onError} />}</div>}
+    {subTab === "mods" && <div className="nested-tab-page"><div className="segmented"><button className={modMode === "toggle" ? "active" : ""} onClick={() => setModMode("toggle")}>模组启动</button><button className={modMode === "config" ? "active" : ""} onClick={() => setModMode("config")}>模组配置</button></div>{modMode === "toggle" ? <PluginsManagerView kind="mods" instancePath={instancePath} onError={onError} /> : <PluginConfigView kind="mods" instancePath={instancePath} onError={onError} />}</div>}
+    {subTab === "backups" && <BackupView instancePath={instancePath} onError={onError} />}
   </section>;
 }
 
-function DownloadTab({ instancePath, onError }: { instancePath: string; onError: (msg: string) => void }) {
-  const [subTab, setSubTab] = useState<"core" | "modrinth" | "spiget" | "java">("core");
-  return <div>
-    <div className="manager-toolbar" style={{ marginBottom: 12, background: "#fff", border: "1px solid #dfe5e1", borderRadius: 8, padding: "6px 14px" }}>
-      <div className="segmented">
-        <button className={subTab === "core" ? "active" : ""} onClick={() => setSubTab("core")}>服务端核心</button>
-        <button className={subTab === "modrinth" ? "active" : ""} onClick={() => setSubTab("modrinth")}>Modrinth</button>
-        <button className={subTab === "spiget" ? "active" : ""} onClick={() => setSubTab("spiget")}>Spiget 插件</button>
-        <button className={subTab === "java" ? "active" : ""} onClick={() => setSubTab("java")}>Java 下载</button>
-      </div>
-    </div>
-    {subTab === "core" && <CoreTypeView instancePath={instancePath} onError={onError} />}
-    {subTab === "modrinth" && <PluginMarketView instancePath={instancePath} onError={onError} />}
-    {subTab === "spiget" && <SpigetPluginView instancePath={instancePath} onError={onError} />}
+function DownloadTab({ subTab, setSubTab, instancePath, onError }: { subTab: DownloadTabKey; setSubTab: (tab: DownloadTabKey) => void; instancePath: string; onError: (msg: string) => void }) {
+  return <section className="hub-page">
+    <TopTabs<DownloadTabKey> value={subTab} onChange={setSubTab} tabs={[
+      { key: "java", label: "Java 下载" },
+      { key: "core", label: "核心下载" },
+      { key: "plugins", label: "插件下载" },
+      { key: "mods", label: "模组下载" },
+    ]} />
     {subTab === "java" && <JavaDownloadView onError={onError} />}
-  </div>;
+    {subTab === "core" && <CoreTypeView instancePath={instancePath} onError={onError} />}
+    {subTab === "plugins" && <PluginMarketView kind="plugins" instancePath={instancePath} onError={onError} />}
+    {subTab === "mods" && <PluginMarketView kind="mods" instancePath={instancePath} onError={onError} />}
+  </section>;
 }
 
 function EulaModal({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
@@ -718,9 +815,15 @@ function AboutView() {
   </div></section>;
 }
 
-function SoftwareSettingsView({ autoRestart, onAutoRestartChange }: { autoRestart: AutoRestartConfig; onAutoRestartChange: (config: AutoRestartConfig) => void }) {
+function SoftwareSettingsView({ subTab, setSubTab, autoRestart, onAutoRestartChange }: { subTab: SoftwareTab; setSubTab: (tab: SoftwareTab) => void; autoRestart: AutoRestartConfig; onAutoRestartChange: (config: AutoRestartConfig) => void }) {
   const [agentUrl, setAgentUrl] = useState(() => localStorage.getItem("astrore.agentUrl") ?? "");
   const [agentToken, setAgentToken] = useState(() => localStorage.getItem("astrore.agentToken") ?? "");
+  const [language, setLanguage] = useState(() => localStorage.getItem("astrore.language") ?? "zh-CN");
+  const [theme, setTheme] = useState(() => localStorage.getItem("astrore.theme") ?? "system");
+  const [aiProvider, setAiProvider] = useState(() => localStorage.getItem("astrore.ai.provider") ?? "openai-compatible");
+  const [aiBaseUrl, setAiBaseUrl] = useState(() => localStorage.getItem("astrore.ai.baseUrl") ?? "");
+  const [aiModel, setAiModel] = useState(() => localStorage.getItem("astrore.ai.model") ?? "");
+  const [aiKey, setAiKey] = useState(() => localStorage.getItem("astrore.ai.apiKey") ?? "");
   const saveAgent = () => {
     if (agentUrl.trim()) localStorage.setItem("astrore.agentUrl", agentUrl.trim().replace(/\/+$/, ""));
     else localStorage.removeItem("astrore.agentUrl");
@@ -728,18 +831,39 @@ function SoftwareSettingsView({ autoRestart, onAutoRestartChange }: { autoRestar
     else localStorage.removeItem("astrore.agentToken");
     window.location.reload();
   };
-  return <section className="software-settings">
-    {isTauriRuntime() && <div className="panel">
-      <PanelHeader icon={<Settings />} title="软件设置" action="全局配置" />
+  const saveBasic = () => {
+    localStorage.setItem("astrore.language", language);
+    localStorage.setItem("astrore.theme", theme);
+  };
+  const saveAi = () => {
+    localStorage.setItem("astrore.ai.provider", aiProvider);
+    localStorage.setItem("astrore.ai.baseUrl", aiBaseUrl.trim());
+    localStorage.setItem("astrore.ai.model", aiModel.trim());
+    localStorage.setItem("astrore.ai.apiKey", aiKey);
+  };
+  return <section className="hub-page software-settings">
+    <TopTabs<SoftwareTab> value={subTab} onChange={setSubTab} tabs={[{ key: "basic", label: "基本设置" }, { key: "ai", label: "AI 助手设置" }]} />
+    {subTab === "basic" && <div className="panel">
+      <PanelHeader icon={<Settings />} title="基本设置" action="全局配置" />
+      <label>软件语言<select value={language} onChange={event => setLanguage(event.target.value)}><option value="zh-CN">简体中文</option><option value="en-US">English</option><option value="ja-JP">日本語</option></select></label>
+      <label>主题<select value={theme} onChange={event => setTheme(event.target.value)}><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label>
       <div className="setting-row">
         <div><span>崩溃自动重启</span><small>服务端意外退出时自动重新启动</small></div>
         <input type="checkbox" checked={autoRestart.enabled} onChange={(e) => onAutoRestartChange({ ...autoRestart, enabled: e.target.checked })} />
       </div>
       <label>最大重启次数<input type="number" min={1} max={10} value={autoRestart.maxRestarts} onChange={(e) => onAutoRestartChange({ ...autoRestart, maxRestarts: Number(e.target.value) })} /></label>
       <label>重启延迟（秒）<input type="number" min={1} max={60} value={autoRestart.restartDelaySecs} onChange={(e) => onAutoRestartChange({ ...autoRestart, restartDelaySecs: Number(e.target.value) })} /></label>
-      <div className="form-actions"><button className="primary" onClick={() => { setAutoRestartConfig(autoRestart).catch(() => undefined); }}>保存设置</button></div>
+      <div className="form-actions"><button className="primary" onClick={() => { saveBasic(); setAutoRestartConfig(autoRestart).catch(() => undefined); }}>保存设置</button></div>
     </div>}
-    {!isTauriRuntime() && <div className="panel agent-settings">
+    {subTab === "ai" && <div className="panel agent-settings">
+      <PanelHeader icon={<Bot />} title="AI 助手设置" action="Provider" />
+      <label>AI 厂商<select value={aiProvider} onChange={event => setAiProvider(event.target.value)}><option value="openai-compatible">OpenAI 兼容接口</option><option value="deepseek">DeepSeek</option><option value="siliconflow">SiliconFlow</option><option value="ollama">Ollama 本地模型</option></select></label>
+      <label>Base URL<input value={aiBaseUrl} onChange={event => setAiBaseUrl(event.target.value)} placeholder="例如 https://api.openai.com/v1" /></label>
+      <label>模型名称<input value={aiModel} onChange={event => setAiModel(event.target.value)} placeholder="例如 gpt-4.1-mini / deepseek-chat" /></label>
+      <label>API Key<input type="password" value={aiKey} onChange={event => setAiKey(event.target.value)} placeholder="保存在本机 localStorage" /></label>
+      <div className="form-actions"><button className="primary" onClick={saveAi}>保存 AI 设置</button></div>
+    </div>}
+    {subTab === "basic" && !isTauriRuntime() && <div className="panel agent-settings">
       <PanelHeader icon={<Server />} title="网页 Agent 连接" action="HTTP API" />
       <label>Agent 地址<input value={agentUrl} onChange={event => setAgentUrl(event.target.value)} placeholder="例如 http://server:1421，留空使用当前站点" /></label>
       <label>访问令牌<input type="password" value={agentToken} onChange={event => setAgentToken(event.target.value)} placeholder="ASTRORE_TOKEN" /></label>

@@ -295,23 +295,24 @@ export function FileManagerView({ instancePath, onError }: CommonProps) {
   </section>;
 }
 
-export function PluginsManagerView({ instancePath, onError }: CommonProps) {
-  const [kind, setKind] = useState<"plugins" | "mods">("plugins");
+export function PluginsManagerView({ instancePath, onError, kind: fixedKind }: CommonProps & { kind?: "plugins" | "mods" }) {
+  const [kind, setKind] = useState<"plugins" | "mods">(fixedKind ?? "plugins");
   const [entries, setEntries] = useState<FileEntry[]>([]);
+  useEffect(() => { if (fixedKind) setKind(fixedKind); }, [fixedKind]);
   const load = useCallback(() => {
     listDirectory(instancePath, kind)
       .then(items => setEntries(items.filter(item => !item.isDir && (item.name.endsWith(".jar") || item.name.endsWith(".disabled")))))
       .catch(e => onError(String(e)));
   }, [instancePath, kind, onError]);
   useEffect(() => { if (instancePath) load(); }, [instancePath, load]);
-  return <section className="panel manager-panel"><div className="manager-toolbar"><div className="segmented"><button className={kind === "plugins" ? "active" : ""} onClick={() => setKind("plugins")}>插件</button><button className={kind === "mods" ? "active" : ""} onClick={() => setKind("mods")}>模组</button></div><span>{entries.length} 个文件</span><button className="icon-btn" onClick={load}><RefreshCw /></button></div>
+  return <section className="panel manager-panel"><div className="manager-toolbar">{!fixedKind && <div className="segmented"><button className={kind === "plugins" ? "active" : ""} onClick={() => setKind("plugins")}>插件</button><button className={kind === "mods" ? "active" : ""} onClick={() => setKind("mods")}>模组</button></div>}<strong>{kind === "plugins" ? "插件启动" : "模组启动"}</strong><span>{entries.length} 个文件</span><button className="icon-btn" onClick={load}><RefreshCw /></button></div>
     {!instancePath ? <Empty text="请先配置实例目录" /> : <div className="plugin-list-real">{entries.map(entry => <div key={entry.relativePath}><div className={entry.enabled ? "plugin-state enabled" : "plugin-state"}>{entry.enabled ? <Check /> : <X />}</div><div><strong>{entry.name.replace(".disabled", "")}</strong><span>{entry.enabled ? "已启用" : "已禁用"} · {sizeLabel(entry.size)}</span></div><button className="secondary" onClick={() => toggleEntry(instancePath, entry.relativePath).then(load).catch(e => onError(String(e)))}>{entry.enabled ? "禁用" : "启用"}</button><button className="icon-btn" onClick={() => { if (confirm(`删除 ${entry.name}？`)) deleteEntry(instancePath, entry.relativePath).then(load).catch(e => onError(String(e))); }}><Trash2 /></button></div>)}</div>}
   </section>;
 }
 
 const pluginConfigExtensions = [".yml", ".yaml", ".json", ".toml", ".conf", ".cfg", ".properties", ".txt"];
 
-export function PluginConfigView({ instancePath, onError }: CommonProps) {
+export function PluginConfigView({ instancePath, onError, kind = "plugins" }: CommonProps & { kind?: "plugins" | "mods" }) {
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [selected, setSelected] = useState<FileEntry | null>(null);
   const [content, setContent] = useState("");
@@ -326,10 +327,15 @@ export function PluginConfigView({ instancePath, onError }: CommonProps) {
     setLoading(true);
     try {
       const found: FileEntry[] = [];
-      const pending = [{ path: "plugins", depth: 0 }];
+      const pending = kind === "plugins" ? [{ path: "plugins", depth: 0 }] : [{ path: "config", depth: 0 }, { path: "mods", depth: 0 }];
       while (pending.length && found.length < 300) {
         const directory = pending.shift()!;
-        const entries = await listDirectory(instancePath, directory.path);
+        let entries: FileEntry[] = [];
+        try {
+          entries = await listDirectory(instancePath, directory.path);
+        } catch {
+          continue;
+        }
         for (const entry of entries) {
           if (entry.isDir && directory.depth < 4 && !entry.name.startsWith(".")) {
             pending.push({ path: entry.relativePath, depth: directory.depth + 1 });
@@ -345,7 +351,7 @@ export function PluginConfigView({ instancePath, onError }: CommonProps) {
     } finally {
       setLoading(false);
     }
-  }, [instancePath, onError]);
+  }, [instancePath, kind, onError]);
 
   useEffect(() => { scan(); }, [scan]);
   useEffect(() => {
@@ -433,6 +439,7 @@ export function PermissionsView({ instancePath, onError }: CommonProps) {
 export function JavaDownloadView({ onError }: { onError: (msg: string) => void }) {
   const [releases, setReleases] = useState<JavaRelease[]>([]);
   const [progress, setProgress] = useState<DownloadProgress | null>(null);
+  const [vendor, setVendor] = useState("temurin");
   const load = useCallback(() => {
     listJavaReleases().then(setReleases).catch(e => onError(String(e)));
   }, [onError]);
@@ -452,6 +459,10 @@ export function JavaDownloadView({ onError }: { onError: (msg: string) => void }
 
   return <section className="panel manager-panel">
     <div className="manager-toolbar"><Download /><strong>Java 运行时下载</strong><span>{releases.length} 个版本</span><button className="icon-btn" onClick={load}><RefreshCw /></button></div>
+    <div className="download-filter-row">
+      <label>Java 厂商<select value={vendor} onChange={event => setVendor(event.target.value)}><option value="temurin">Eclipse Temurin</option><option value="microsoft">Microsoft Build of OpenJDK</option><option value="zulu">Azul Zulu</option><option value="graalvm">GraalVM Community</option></select></label>
+      <label>推荐版本<select defaultValue="21"><option value="8">Java 8</option><option value="17">Java 17</option><option value="21">Java 21</option><option value="25">Java 25</option></select></label>
+    </div>
     <div className="market-hero" style={{ minHeight: 120 }}>
       <strong>Eclipse Adoptium Temurin JDK 21</strong>
       <span>Java 21 是 Minecraft 1.20.5+ 的推荐版本，兼容大部分现代服务端核心。下载后双击 msi 文件安装即可。</span>
@@ -625,9 +636,12 @@ export function CoreTypeView({ instancePath, onError }: CommonProps) {
 
 function Empty({ text }: { text: string }) { return <div className="empty-state"><Folder /><span>{text}</span></div>; }
 
-export function PluginMarketView({ instancePath, onError }: CommonProps) {
-  const [kind, setKind] = useState<"plugins" | "mods">("plugins");
+export function PluginMarketView({ instancePath, onError, kind: fixedKind }: CommonProps & { kind?: "plugins" | "mods" }) {
+  const [kind, setKind] = useState<"plugins" | "mods">(fixedKind ?? "plugins");
   const [query, setQuery] = useState("");
+  const [gameVersion, setGameVersion] = useState("");
+  const [loader, setLoader] = useState("");
+  const [sort, setSort] = useState("relevance");
   const [results, setResults] = useState<PluginInfo[]>([]);
   const [searching, setSearching] = useState(false);
   const [selected, setSelected] = useState<PluginInfo | null>(null);
@@ -637,7 +651,8 @@ export function PluginMarketView({ instancePath, onError }: CommonProps) {
   const search = async () => {
     setSearching(true);
     try {
-      const items = await searchModrinth(query.trim() || "popular", kind);
+      const terms = [query.trim() || "popular", gameVersion, loader, sort !== "relevance" ? sort : ""].filter(Boolean).join(" ");
+      const items = await searchModrinth(terms, kind);
       setResults(items);
       setSelected(null);
       setVersions([]);
@@ -645,6 +660,7 @@ export function PluginMarketView({ instancePath, onError }: CommonProps) {
     setSearching(false);
   };
 
+  useEffect(() => { if (fixedKind) setKind(fixedKind); }, [fixedKind]);
   useEffect(() => { search(); }, [kind]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectProject = async (project: PluginInfo) => {
@@ -671,16 +687,22 @@ export function PluginMarketView({ instancePath, onError }: CommonProps) {
 
   return <section className="panel manager-panel">
     <div className="manager-toolbar">
-      <div className="segmented">
+      {!fixedKind && <div className="segmented">
         <button className={kind === "plugins" ? "active" : ""} onClick={() => { setKind("plugins"); setResults([]); setSelected(null); }}>插件</button>
         <button className={kind === "mods" ? "active" : ""} onClick={() => { setKind("mods"); setResults([]); setSelected(null); }}>模组</button>
-      </div>
+      </div>}
+      {fixedKind && <strong>{fixedKind === "plugins" ? "插件下载" : "模组下载"}</strong>}
       <div className="search" style={{ width: 220, marginLeft: 8 }}>
         <Search size={14} />
         <input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && search()} placeholder={`搜索 ${kind === "plugins" ? "插件" : "模组"}...`} />
       </div>
       <button className="primary" onClick={search} disabled={searching}>{searching ? "搜索中..." : "搜索"}</button>
       <span style={{ marginLeft: "auto" }}>{results.length} 个结果</span>
+    </div>
+    <div className="download-filter-row">
+      <label>Minecraft 版本<input value={gameVersion} onChange={event => setGameVersion(event.target.value)} onKeyDown={event => event.key === "Enter" && search()} placeholder="例如 1.21.8" /></label>
+      <label>加载器<select value={loader} onChange={event => setLoader(event.target.value)}><option value="">全部</option><option value="paper">Paper</option><option value="spigot">Spigot</option><option value="fabric">Fabric</option><option value="forge">Forge</option><option value="neoforge">NeoForge</option></select></label>
+      <label>排序<select value={sort} onChange={event => setSort(event.target.value)}><option value="relevance">相关度</option><option value="downloads">下载量</option><option value="updated">最近更新</option><option value="follows">收藏数</option></select></label>
     </div>
     {!instancePath ? <Empty text="请先配置实例目录" /> : selected ? (
       <div>

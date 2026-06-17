@@ -20,6 +20,17 @@ use tokio::{
 mod mcp_client;
 use mcp_client::{is_safe_extension_id, ExtensionInfo, ExtensionManager, ExtensionManifest, McpTool};
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(windows)]
+fn hide_subprocess_window(command: &mut Command) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn hide_subprocess_window(_: &mut Command) {}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EulaState {
@@ -1019,6 +1030,7 @@ fn start_server_inner(
         config.java_path.trim()
     };
     let mut command = Command::new(java);
+    hide_subprocess_window(&mut command);
     command
         .current_dir(&root)
         .arg(format!("-Xms{}M", config.min_memory_mb))
