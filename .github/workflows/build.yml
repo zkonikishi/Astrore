@@ -61,14 +61,9 @@ jobs:
       - name: Generate platform icons
         run: npm run tauri icon public/astrore-icon.png
 
-      - name: Build Tauri (Windows portable only)
+      - name: Build Tauri (Windows - exe only, no installer)
         if: matrix.platform == 'windows-latest'
-        run: npm run tauri build -- --bundles ""
-        continue-on-error: true
-
-      - name: Build Tauri (Windows exe only)
-        if: matrix.platform == 'windows-latest'
-        run: cargo build --manifest-path src-tauri/Cargo.toml --release
+        run: npm run tauri build -- --no-bundle
 
       - name: Build Tauri bundles (Linux/macOS)
         if: matrix.platform != 'windows-latest'
@@ -118,7 +113,7 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: |
-            ${{ matrix.platform != 'windows-latest' && 'src-tauri/target/release/bundle/**' || '' }}
+            ${{ matrix.platform == 'windows-latest' && 'src-tauri/target/release/astrore.exe' || 'src-tauri/target/release/bundle/**' }}
             Astrore_*_x64-portable.zip
             Astrore-Agent-*.zip
             Astrore-Agent-*.tar.gz
