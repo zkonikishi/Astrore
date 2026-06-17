@@ -69,20 +69,12 @@ jobs:
         if: matrix.platform != 'windows-latest'
         run: npm run tauri build -- --bundles ${{ matrix.bundles }}
 
-      - name: Package Windows portable
+      - name: Rename Windows exe
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          New-Item -ItemType Directory -Force portable-package | Out-Null
-          Copy-Item src-tauri/target/release/astrore.exe portable-package/Astrore.exe
-          @"
-          Astrore Windows Portable
-
-          Double-click Astrore.exe to start the desktop app.
-          If Windows asks for WebView2 Runtime, install it from Microsoft first.
-          "@ | Set-Content portable-package/README.txt -Encoding UTF8
-          Compress-Archive -Path portable-package/* -DestinationPath "Astrore_${version}_x64-portable.zip" -Force
+          Rename-Item src-tauri/target/release/astrore.exe "Astrore_${version}_x64.exe"
 
       - name: Build web Agent
         run: cargo build --manifest-path src-tauri/Cargo.toml --release --bin astrore-agent
@@ -113,8 +105,7 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: |
-            ${{ matrix.platform == 'windows-latest' && 'src-tauri/target/release/astrore.exe' || 'src-tauri/target/release/bundle/**' }}
-            Astrore_*_x64-portable.zip
+            ${{ matrix.platform == 'windows-latest' && 'src-tauri/target/release/Astrore_*_x64.exe' || 'src-tauri/target/release/bundle/**' }}
             Astrore-Agent-*.zip
             Astrore-Agent-*.tar.gz
           if-no-files-found: error
@@ -128,10 +119,10 @@ jobs:
           prerelease: false
           generate_release_notes: true
           files: |
+            src-tauri/target/release/Astrore_*_x64.exe
             src-tauri/target/release/bundle/**/*.dmg
             src-tauri/target/release/bundle/**/*.app.tar.gz
             src-tauri/target/release/bundle/**/*.deb
             src-tauri/target/release/bundle/**/*.AppImage
-            Astrore_*_x64-portable.zip
             Astrore-Agent-*.zip
             Astrore-Agent-*.tar.gz
