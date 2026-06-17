@@ -125,11 +125,11 @@ ASTRORE_TOKEN='replace-with-a-long-random-token' \
 
 `.github/workflows/build.yml` 会构建并上传：
 
-- Windows：`Astrore_x.x.x_x64.exe`、`Astrore-Agent-Windows.zip`
+- Windows：`Astrore_x.x.x_x64.exe`、`Astrore_x.x.x_x64_portable.zip`、`Astrore-Agent-Windows.zip`
 - Linux：DEB、AppImage、`Astrore-Agent-Linux.tar.gz`
 - macOS：App、DMG、`Astrore-Agent-macOS.tar.gz`
 
-产物当前未进行代码签名。
+Windows 桌面端不提供安装器，发布为单文件 exe 和免安装 zip。产物当前未进行代码签名。
 
 ## 常见问题
 

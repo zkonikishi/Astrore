@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import { BackupView, CoreTypeView, ExtensionStoreView, JavaDownloadView, PermissionsView, PluginConfigView, PluginMarketView, PluginsManagerView, PropertiesView } from "./ManagementViews";
 import { AiAssistant } from "./AiAssistant";
+import { PROVIDERS, findProviderById } from "./aiProviders";
 import {
   acceptEula,
   checkAgentConnection,
@@ -46,10 +47,12 @@ import {
   getMetrics,
   getServerStatus,
   isTauriRuntime,
+  readProperties,
   sendServerCommand,
   setAutoRestartConfig,
   startServer,
   stopServer,
+  writeProperties,
   type AutoRestartConfig,
   type AgentConnection,
   type InstanceConfig,
@@ -743,7 +746,7 @@ function InstanceConfigView({ subTab, setSubTab, mode, config, onChange, onSave,
       </div>
     </div>}
     {subTab === "properties" && <PropertiesView instancePath={instancePath} onError={onError} />}
-    {subTab === "rules" && <PermissionsView instancePath={instancePath} onError={onError} />}
+    {subTab === "rules" && <RulesSettingsView instancePath={instancePath} onError={onError} />}
     {subTab === "optimization" && <div className="panel settings-form"><PanelHeader icon={<Gauge />} title="Paper / Purpur 优化建议" action="配置模板" />
       <div className="setting-row"><div><span>推荐使用 Aikar G1GC 参数</span><small>适合大多数 Paper/Folia/Purpur 服务端，保存后写入 JVM 参数。</small></div><button className="secondary" onClick={() => update({ javaArgs: ["-XX:+UseG1GC", "-XX:+ParallelRefProcEnabled", "-XX:MaxGCPauseMillis=200", "-XX:+UnlockExperimentalVMOptions", "-XX:+DisableExplicitGC"] })}>应用</button></div>
       <div className="setting-row"><div><span>降低 entity-activation-range</span><small>后续会写入 paper-world-defaults.yml / spigot.yml。</small></div><input type="checkbox" /></div>
@@ -751,6 +754,68 @@ function InstanceConfigView({ subTab, setSubTab, mode, config, onChange, onSave,
       <div className="setting-row"><div><span>启用 Paper 配置备份</span><small>改写优化项前保存原配置，避免误操作。</small></div><input type="checkbox" defaultChecked /></div>
       <div className="form-actions"><button className="primary" onClick={onSave}>保存当前 JVM 参数</button></div>
     </div>}
+  </section>;
+}
+
+function RulesSettingsView({ instancePath, onError }: { instancePath: string; onError: (message: string) => void }) {
+  const [properties, setProperties] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  const load = async () => {
+    if (!instancePath) {
+      setProperties({});
+      setLoaded(false);
+      return;
+    }
+    try {
+      setProperties(await readProperties(instancePath));
+      setLoaded(true);
+    } catch (error) {
+      onError(String(error));
+    }
+  };
+
+  useEffect(() => { load(); }, [instancePath]);
+
+  const update = (key: string, value: string) => setProperties(current => ({ ...current, [key]: value }));
+  const save = async () => {
+    if (!instancePath) return onError("请先配置实例目录");
+    setSaving(true);
+    try {
+      await writeProperties(instancePath, properties);
+      setLoaded(true);
+    } catch (error) {
+      onError(String(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const bool = (key: string, fallback = "false") => properties[key] ?? fallback;
+  return <section className="rules-layout">
+    <div className="panel settings-form">
+      <PanelHeader icon={<ShieldCheck />} title="服务器规则设置" action={loaded ? "server.properties" : "等待读取"} />
+      <div className="form-grid">
+        <label>玩家游戏模式<select value={properties.gamemode ?? "survival" } onChange={event => update("gamemode", event.target.value)}><option value="survival">生存</option><option value="creative">创造</option><option value="adventure">冒险</option><option value="spectator">旁观</option></select></label>
+        <label>游戏世界难度<select value={properties.difficulty ?? "easy"} onChange={event => update("difficulty", event.target.value)}><option value="peaceful">和平</option><option value="easy">简单</option><option value="normal">普通</option><option value="hard">困难</option></select></label>
+        <label>最大玩家数量<input type="number" min="1" value={properties["max-players"] ?? "20"} onChange={event => update("max-players", event.target.value)} /></label>
+        <label>服务端端口<input type="number" min="1" max="65535" value={properties["server-port"] ?? "25565"} onChange={event => update("server-port", event.target.value)} /></label>
+      </div>
+      <div className="check-grid">
+        <label><input type="checkbox" checked={bool("online-mode", "true") === "true"} onChange={event => update("online-mode", String(event.target.checked))} />启用正版验证</label>
+        <label><input type="checkbox" checked={bool("white-list") === "true"} onChange={event => update("white-list", String(event.target.checked))} />启用白名单</label>
+        <label><input type="checkbox" checked={bool("pvp", "true") === "true"} onChange={event => update("pvp", String(event.target.checked))} />允许 PVP</label>
+        <label><input type="checkbox" checked={bool("enable-command-block") === "true"} onChange={event => update("enable-command-block", String(event.target.checked))} />启用命令方块</label>
+        <label><input type="checkbox" checked={bool("allow-flight") === "true"} onChange={event => update("allow-flight", String(event.target.checked))} />允许飞行</label>
+        <label><input type="checkbox" checked={bool("spawn-animals", "true") === "true"} onChange={event => update("spawn-animals", String(event.target.checked))} />生成动物</label>
+        <label><input type="checkbox" checked={bool("spawn-monsters", "true") === "true"} onChange={event => update("spawn-monsters", String(event.target.checked))} />生成怪物</label>
+        <label><input type="checkbox" checked={bool("enable-rcon") === "true"} onChange={event => update("enable-rcon", String(event.target.checked))} />启用 RCON</label>
+      </div>
+      <label>服务器 MOTD<input value={properties.motd ?? ""} onChange={event => update("motd", event.target.value)} placeholder="A Minecraft Server" /></label>
+      <div className="form-actions"><button className="secondary" disabled={!instancePath || saving} onClick={load}>重新读取</button><button className="primary" disabled={!instancePath || saving} onClick={save}>{saving ? "保存中..." : "保存规则"}</button></div>
+    </div>
+    <PermissionsView instancePath={instancePath} onError={onError} />
   </section>;
 }
 
@@ -820,10 +885,11 @@ function SoftwareSettingsView({ subTab, setSubTab, autoRestart, onAutoRestartCha
   const [agentToken, setAgentToken] = useState(() => localStorage.getItem("astrore.agentToken") ?? "");
   const [language, setLanguage] = useState(() => localStorage.getItem("astrore.language") ?? "zh-CN");
   const [theme, setTheme] = useState(() => localStorage.getItem("astrore.theme") ?? "system");
-  const [aiProvider, setAiProvider] = useState(() => localStorage.getItem("astrore.ai.provider") ?? "openai-compatible");
-  const [aiBaseUrl, setAiBaseUrl] = useState(() => localStorage.getItem("astrore.ai.baseUrl") ?? "");
+  const [aiProvider, setAiProvider] = useState(() => localStorage.getItem("astrore.ai.provider") ?? "openai");
+  const [aiEndpoint, setAiEndpoint] = useState(() => localStorage.getItem("astrore.ai.endpoint") ?? "https://api.openai.com/v1/chat/completions");
   const [aiModel, setAiModel] = useState(() => localStorage.getItem("astrore.ai.model") ?? "");
   const [aiKey, setAiKey] = useState(() => localStorage.getItem("astrore.ai.apiKey") ?? "");
+  const selectedAiProvider = findProviderById(aiProvider);
   const saveAgent = () => {
     if (agentUrl.trim()) localStorage.setItem("astrore.agentUrl", agentUrl.trim().replace(/\/+$/, ""));
     else localStorage.removeItem("astrore.agentUrl");
@@ -837,9 +903,16 @@ function SoftwareSettingsView({ subTab, setSubTab, autoRestart, onAutoRestartCha
   };
   const saveAi = () => {
     localStorage.setItem("astrore.ai.provider", aiProvider);
-    localStorage.setItem("astrore.ai.baseUrl", aiBaseUrl.trim());
+    localStorage.setItem("astrore.ai.endpoint", aiEndpoint.trim());
     localStorage.setItem("astrore.ai.model", aiModel.trim());
     localStorage.setItem("astrore.ai.apiKey", aiKey);
+  };
+  const changeAiProvider = (providerId: string) => {
+    const provider = findProviderById(providerId);
+    setAiProvider(providerId);
+    if (!provider) return;
+    setAiEndpoint(provider.endpoint);
+    setAiModel(provider.defaultModel || provider.models[0] || aiModel);
   };
   return <section className="hub-page software-settings">
     <TopTabs<SoftwareTab> value={subTab} onChange={setSubTab} tabs={[{ key: "basic", label: "基本设置" }, { key: "ai", label: "AI 助手设置" }]} />
@@ -857,10 +930,10 @@ function SoftwareSettingsView({ subTab, setSubTab, autoRestart, onAutoRestartCha
     </div>}
     {subTab === "ai" && <div className="panel agent-settings">
       <PanelHeader icon={<Bot />} title="AI 助手设置" action="Provider" />
-      <label>AI 厂商<select value={aiProvider} onChange={event => setAiProvider(event.target.value)}><option value="openai-compatible">OpenAI 兼容接口</option><option value="deepseek">DeepSeek</option><option value="siliconflow">SiliconFlow</option><option value="ollama">Ollama 本地模型</option></select></label>
-      <label>Base URL<input value={aiBaseUrl} onChange={event => setAiBaseUrl(event.target.value)} placeholder="例如 https://api.openai.com/v1" /></label>
-      <label>模型名称<input value={aiModel} onChange={event => setAiModel(event.target.value)} placeholder="例如 gpt-4.1-mini / deepseek-chat" /></label>
-      <label>API Key<input type="password" value={aiKey} onChange={event => setAiKey(event.target.value)} placeholder="保存在本机 localStorage" /></label>
+      <label>AI 厂商<select value={aiProvider} onChange={event => changeAiProvider(event.target.value)}>{PROVIDERS.map(provider => <option key={provider.id} value={provider.id}>{provider.name} · {provider.tag}</option>)}</select></label>
+      <label>兼容接口地址<input value={aiEndpoint} onChange={event => setAiEndpoint(event.target.value)} placeholder="例如 https://api.openai.com/v1/chat/completions" /></label>
+      <label>模型名称{selectedAiProvider && selectedAiProvider.models.length > 0 && <select value={aiModel} onChange={event => setAiModel(event.target.value)}>{selectedAiProvider.models.map(model => <option key={model} value={model}>{model}</option>)}</select>}<input value={aiModel} onChange={event => setAiModel(event.target.value)} placeholder="例如 gpt-4.1-mini / deepseek-chat" /></label>
+      <label>API Key<input type="password" value={aiKey} onChange={event => setAiKey(event.target.value)} placeholder={selectedAiProvider?.apiKeyHint ?? "保存在本机 localStorage"} /></label>
       <div className="form-actions"><button className="primary" onClick={saveAi}>保存 AI 设置</button></div>
     </div>}
     {subTab === "basic" && !isTauriRuntime() && <div className="panel agent-settings">

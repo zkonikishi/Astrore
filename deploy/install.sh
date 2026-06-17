@@ -201,7 +201,7 @@ ASTRORE_BIND=${BIND_HOST}:${BIND_PORT}
 # 访问令牌 (留空则仅允许本地访问)
 ASTRORE_TOKEN=${AGENT_TOKEN}
 # 网页资源目录
-ASTRORE_WEB_DIR=${INSTALL_DIR}/dist
+ASTRORE_WEB_ROOT=${INSTALL_DIR}/dist
 EOF
 
     # 如果未设置令牌，生成一个随机令牌用于本地访问
@@ -239,13 +239,13 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=astrore-agent
 
-# 安全加固
+# 基础安全加固。Agent 需要读写用户选择的 Minecraft 实例目录，
+# 因此不能使用 ProtectSystem=strict / ProtectHome=yes 这类过强限制。
 NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectSystem=strict
-ProtectHome=yes
-ReadWritePaths=${INSTALL_DIR}
-ReadOnlyPaths=/etc/passwd /etc/group
+ProtectSystem=full
+ProtectHome=no
+ReadWritePaths=${INSTALL_DIR} /home /srv /opt /var/minecraft
 
 [Install]
 WantedBy=multi-user.target

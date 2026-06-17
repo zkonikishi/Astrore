@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Archive, ArrowLeft, Ban, Check, Download, FileCog, FileText, Folder, Pencil, Plus, RefreshCw, RotateCcw, Save, Search, Shield, Star, Trash2, User, UserPlus, X, XCircle } from "lucide-react";
 import {
@@ -33,6 +33,7 @@ import {
   startExtension,
   stopExtension,
   toggleEntry,
+  uninstallExtension,
   updatePlayer,
   writeProperties,
   writeTextFile,
@@ -240,6 +241,7 @@ export function ExtensionStoreView({ onError }: { onError: (msg: string) => void
             <div><strong>{ext.name}</strong><span>{ext.description}</span><span className="ext-meta"><User size={12} /> {ext.author} · v{ext.version} · {ext.runtime === "wasi" ? "WASI 沙箱" : "外部 MCP 高风险"} · {ext.permissions.join("、") || "无权限"}</span></div>
             {catalog.find(entry => entry.id === ext.id && isNewer(entry.version, ext.version)) && <button className="primary" onClick={() => install(catalog.find(entry => entry.id === ext.id && isNewer(entry.version, ext.version))!)}><Download />更新</button>}
             <button className="secondary" onClick={() => toggle(ext)} disabled={busy === ext.id}>{busy === ext.id ? "..." : ext.running ? "停止" : "启动"}</button>
+            <button className="icon-btn" onClick={() => { if (confirm(`确定卸载 ${ext.name}？`)) { uninstallExtension(ext.id).then(load).catch(e => onError(String(e))); } }} title="卸载"><Trash2 size={14} /></button>
             {ext.tools.length > 0 && <div className="segmented" style={{ marginLeft: 8 }}>
               {ext.tools.map(t => (
                 <button key={t.name} className="secondary" onClick={() => { setSelectedTool({ extensionId: ext.id, tool: t, author: ext.author }); setToolArgs("{}"); setToolResult(""); }} style={{ fontSize: 10 }}>{t.name}</button>
@@ -464,8 +466,8 @@ export function JavaDownloadView({ onError }: { onError: (msg: string) => void }
       <label>推荐版本<select defaultValue="21"><option value="8">Java 8</option><option value="17">Java 17</option><option value="21">Java 21</option><option value="25">Java 25</option></select></label>
     </div>
     <div className="market-hero" style={{ minHeight: 120 }}>
-      <strong>Eclipse Adoptium Temurin JDK 21</strong>
-      <span>Java 21 是 Minecraft 1.20.5+ 的推荐版本，兼容大部分现代服务端核心。下载后双击 msi 文件安装即可。</span>
+      <strong>{vendor === "temurin" ? "Eclipse Adoptium Temurin JDK 21" : "更多 Java 厂商即将接入"}</strong>
+      <span>Java 21 是 Minecraft 1.20.5+ 的推荐版本。下载后可安装到系统，或在实例配置里填写 Java 可执行文件路径。</span>
     </div>
     <div className="plugin-list-real">
       {releases.map(r => (

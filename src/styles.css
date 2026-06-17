@@ -472,7 +472,8 @@ header {
   font-size: 11px;
 }
 .settings-form input,
-.settings-form textarea {
+.settings-form textarea,
+.settings-form select {
   padding: 10px 11px;
   font-size: 12px;
 }
@@ -656,6 +657,7 @@ header {
 .control-side .ai-settings { display: none; }
 
 .instance-runtime-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 12px; }
+.rules-layout { display: grid; gap: 12px; }
 .fieldset-title { margin: 15px 15px 0; padding-top: 10px; color: #2f6f4a; border-top: 1px solid #edf1ee; font-size: 13px; font-weight: 800; }
 .inline-field-row { display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: 10px; margin: 14px 15px 0; }
 .inline-field-row select, .software-settings select, .download-filter-row select, .download-filter-row input { min-width: 0; width: 100%; padding: 9px 10px; border: 1px solid #d7ded9; border-radius: 5px; outline: 0; background: #fafbfa; font-size: 11px; }

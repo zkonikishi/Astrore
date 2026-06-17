@@ -986,7 +986,7 @@ fn emit_system_metrics(app: &AppHandle) {
         if let Some(pid) = managed.pid.map(|p| p as usize) {
             let mut sys_guard = state.sys.lock().unwrap();
             let sys = sys_guard.get_or_insert_with(|| {
-                let mut s = sysinfo::System::new_all();
+                let mut s = sysinfo::System::new();
                 s.refresh_memory();
                 s
             });
@@ -1858,13 +1858,12 @@ fn scan_extensions(state: State<'_, AppState>) -> Result<Vec<ExtensionInfo>, Str
     let mut pm = state.plugin_manager.lock().map_err(|_| "扩展管理器锁已损坏")?;
     let pm = pm.as_mut().ok_or("扩展管理器未初始化")?;
     let manifests = pm.scan_extensions();
-    let enabled_ids: Vec<String> = Vec::new();
     let mut infos = Vec::new();
     for m in manifests {
         if pm.get_extension(&m.id).is_none() {
             pm.register(m.clone());
         }
-        if let Some(info) = pm.extension_info(&m.id, &enabled_ids) {
+        if let Some(info) = pm.extension_info(&m.id, &[]) {
             infos.push(info);
         }
     }
@@ -1903,6 +1902,19 @@ fn call_extension_tool(
     let result = pm.call_tool(&extension_id, &tool_name, arguments);
     write_extension_audit(if result.is_ok() { "tool-call" } else { "tool-call-failed" }, &extension_id, &tool_name);
     result
+}
+
+#[tauri::command]
+fn uninstall_extension(extension_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    let mut pm = state.plugin_manager.lock().map_err(|_| "扩展管理器锁已损坏")?;
+    let pm = pm.as_mut().ok_or("扩展管理器未初始化")?;
+    pm.remove_extension(&extension_id);
+    let dir = pm.extensions_dir().join(&extension_id);
+    if dir.exists() {
+        fs::remove_dir_all(&dir).map_err(|e| format!("删除扩展目录失败: {e}"))?;
+    }
+    write_extension_audit("uninstall", &extension_id, "");
+    Ok(())
 }
 
 #[tauri::command]
@@ -1957,6 +1969,7 @@ pub fn run() {
             start_extension,
             stop_extension,
             call_extension_tool,
+            uninstall_extension,
             fetch_extension_registry,
             install_registry_extension,
             ai_chat,

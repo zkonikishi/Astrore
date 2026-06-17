@@ -76,6 +76,26 @@ jobs:
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
           Rename-Item src-tauri/target/release/astrore.exe "Astrore_${version}_x64.exe"
 
+      - name: Package Windows portable desktop
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          New-Item -ItemType Directory -Force portable/Astrore | Out-Null
+          Copy-Item "src-tauri/target/release/Astrore_${version}_x64.exe" portable/Astrore/
+          @"
+          Astrore Windows 免安装版
+
+          运行方式：
+          1. 解压整个文件夹
+          2. 双击 Astrore_${version}_x64.exe
+
+          注意：
+          - 本版本不包含安装器，不会写入开始菜单或注册卸载项。
+          - 如需管理本机 Minecraft 服务端，请确认 Java 与服务端核心已配置。
+          "@ | Set-Content -Encoding UTF8 portable/Astrore/README.txt
+          Compress-Archive -Path portable/Astrore -DestinationPath "Astrore_${version}_x64_portable.zip"
+
       - name: Build web Agent
         run: cargo build --manifest-path src-tauri/Cargo.toml --release --bin astrore-agent
 
@@ -106,6 +126,7 @@ jobs:
           name: ${{ matrix.artifact }}
           path: |
             ${{ matrix.platform == 'windows-latest' && 'src-tauri/target/release/Astrore_*_x64.exe' || 'src-tauri/target/release/bundle/**' }}
+            Astrore_*_x64_portable.zip
             Astrore-Agent-*.zip
             Astrore-Agent-*.tar.gz
           if-no-files-found: error
@@ -120,6 +141,7 @@ jobs:
           generate_release_notes: true
           files: |
             src-tauri/target/release/Astrore_*_x64.exe
+            Astrore_*_x64_portable.zip
             src-tauri/target/release/bundle/**/*.dmg
             src-tauri/target/release/bundle/**/*.app.tar.gz
             src-tauri/target/release/bundle/**/*.deb

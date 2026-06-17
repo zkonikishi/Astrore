@@ -114,6 +114,20 @@ struct FileEntry {
     enabled: bool,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SpigetResource {
+    id: u32,
+    name: String,
+    tag: String,
+    description: String,
+    icon_url: String,
+    downloads: u64,
+    rating: f64,
+    author: String,
+    version: String,
+}
+
 fn error(status: StatusCode, message: impl Into<String>) -> (StatusCode, Json<Value>) {
     (status, Json(json!({ "error": message.into() })))
 }
@@ -659,6 +673,7 @@ async fn invoke(command: &str, args: Value, state: &AgentState) -> Result<Value,
             *state.auto_restart.lock().await = config;
             Ok(Value::Null)
         }
+        "cancel_download" => Ok(Value::Null),
         "list_server_cores" => {
             let data: Value = reqwest::Client::new().get("https://download.fastmirror.net/api/v3").header("User-Agent", "Astrore-Agent/0.2")
                 .send().await.map_err(|error| error.to_string())?.error_for_status().map_err(|error| error.to_string())?
@@ -732,6 +747,43 @@ async fn invoke(command: &str, args: Value, state: &AgentState) -> Result<Value,
                 .error_for_status().map_err(|error| error.to_string())?.bytes().await.map_err(|error| error.to_string())?;
             let directory = root.join(kind);
             fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+            fs::write(directory.join(name), bytes).map_err(|error| error.to_string())?;
+            Ok(json!(name))
+        }
+        "search_spiget" => {
+            let query = args.get("query").and_then(Value::as_str).unwrap_or("popular");
+            let url = format!("https://api.spiget.org/v2/search/resources/{query}?size=20&sort=-downloads&fields=id,name,tag,description,icon,downloads,rating,author,version");
+            let data: Value = reqwest::Client::new()
+                .get(&url)
+                .header("User-Agent", "Astrore-Agent/0.2")
+                .send().await.map_err(|error| format!("搜索失败: {error}"))?
+                .error_for_status().map_err(|error| format!("Spiget 返回错误: {error}"))?
+                .json().await.map_err(|error| format!("解析失败: {error}"))?;
+            Ok(Value::Array(data.as_array().into_iter().flatten().map(|item| json!(SpigetResource {
+                id: item["id"].as_u64().unwrap_or(0) as u32,
+                name: item["name"].as_str().unwrap_or_default().to_string(),
+                tag: item["tag"].as_str().unwrap_or_default().to_string(),
+                description: item["description"].as_str().unwrap_or_default().to_string(),
+                icon_url: item["icon"].as_object().and_then(|icon| icon["url"].as_str()).unwrap_or_default().to_string(),
+                downloads: item["downloads"].as_u64().unwrap_or(0),
+                rating: item["rating"].as_f64().unwrap_or(0.0),
+                author: item["author"].as_object().and_then(|author| author["name"].as_str()).unwrap_or_default().to_string(),
+                version: item["version"].as_object().and_then(|version| version["name"].as_str()).unwrap_or_default().to_string(),
+            })).collect()))
+        }
+        "download_spiget_plugin" => {
+            let root = root(&args)?;
+            let resource_id = args.get("resourceId").and_then(Value::as_u64).ok_or("缺少 Spiget 资源 ID")?;
+            let name = args.get("fileName").and_then(Value::as_str).ok_or("缺少文件名")?;
+            if name.is_empty() || name.contains(['/', '\\']) { return Err("无效的文件名".into()); }
+            let directory = root.join("plugins");
+            fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+            let bytes = reqwest::Client::new()
+                .get(format!("https://api.spiget.org/v2/resources/{resource_id}/download"))
+                .header("User-Agent", "Astrore-Agent/0.2")
+                .send().await.map_err(|error| format!("下载失败: {error}"))?
+                .error_for_status().map_err(|error| format!("Spiget 返回错误: {error}"))?
+                .bytes().await.map_err(|error| format!("读取失败: {error}"))?;
             fs::write(directory.join(name), bytes).map_err(|error| error.to_string())?;
             Ok(json!(name))
         }

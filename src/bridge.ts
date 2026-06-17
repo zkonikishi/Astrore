@@ -437,16 +437,17 @@ export async function selectDownloadPath(defaultName: string): Promise<string | 
 
 export async function searchSpiget(query: string): Promise<SpigetResource[]> {
   if (isTauriRuntime()) return invoke("search_spiget", { query });
-  return [];
+  return webInvoke("search_spiget", { query });
 }
 
 export async function cancelDownload(): Promise<void> {
   if (isTauriRuntime()) return invoke("cancel_download");
+  return webInvoke("cancel_download");
 }
 
 export async function downloadSpigetPlugin(instancePath: string, resourceId: number, fileName: string): Promise<string> {
   if (isTauriRuntime()) return invoke("download_spiget_plugin", { instancePath, resourceId, fileName });
-  return "";
+  return webInvoke("download_spiget_plugin", { instancePath, resourceId, fileName });
 }
 
 export async function downloadPlugin(instancePath: string, downloadUrl: string, fileName: string, kind: string): Promise<string> {
@@ -495,6 +496,11 @@ export async function stopExtension(extensionId: string): Promise<void> {
 export async function callExtensionTool(extensionId: string, toolName: string, args: Record<string, unknown>): Promise<unknown> {
   if (isTauriRuntime()) return invoke("call_extension_tool", { extensionId, toolName, arguments: args });
   return null;
+}
+
+export async function uninstallExtension(extensionId: string): Promise<void> {
+  if (isTauriRuntime()) return invoke("uninstall_extension", { extensionId });
+  throw new Error("网页端暂不支持卸载本地扩展，请在桌面端操作");
 }
 
 export async function fetchExtensionRegistry(registryUrl: string): Promise<RegistryExtension[]> {
