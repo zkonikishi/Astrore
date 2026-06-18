@@ -1,4 +1,4 @@
-name: Build Astrore
+﻿name: Build Astrore
 
 on:
   push:
@@ -103,22 +103,24 @@ jobs:
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
           New-Item -ItemType Directory -Force agent-package/dist | Out-Null
           Copy-Item dist/* agent-package/dist -Recurse
           Copy-Item src-tauri/target/release/astrore-agent.exe agent-package/
           Copy-Item deploy/start-agent.bat agent-package/
-          Compress-Archive -Path agent-package/* -DestinationPath Astrore-Agent-Windows.zip
+          Compress-Archive -Path agent-package/* -DestinationPath "Astrore-Agent-${version}-Windows.zip"
 
       - name: Package Unix Agent with web UI
         if: matrix.platform != 'windows-latest'
         shell: bash
         run: |
+          version=$(node -p "require('./package.json').version")
           mkdir -p agent-package/dist
           cp -R dist/. agent-package/dist/
           cp src-tauri/target/release/astrore-agent agent-package/
           cp deploy/start-agent.sh agent-package/
           chmod +x agent-package/astrore-agent agent-package/start-agent.sh
-          tar -czf Astrore-Agent-${{ matrix.platform == 'ubuntu-22.04' && 'Linux' || 'macOS' }}.tar.gz -C agent-package .
+          tar -czf Astrore-Agent-${version}-${{ matrix.platform == 'ubuntu-22.04' && 'Linux' || 'macOS' }}.tar.gz -C agent-package .
 
       - name: Upload bundles
         uses: actions/upload-artifact@v4
