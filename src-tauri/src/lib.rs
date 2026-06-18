@@ -1577,6 +1577,71 @@ async fn download_official_server_core(
     download_to_instance(&app, &root, &download_url, &file_name).await
 }
 
+async fn download_to_instance(
+    app: &AppHandle,
+    root: &Path,
+    download_url: &str,
+    file_name: &str,
+) -> Result<String, String> {
+    let safe_name = Path::new(file_name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .ok_or("Invalid download file name")?
+        .to_string();
+    let target = root.join(&safe_name);
+    let part = root.join(format!("{safe_name}.part"));
+    let mut response = reqwest::Client::new()
+        .get(download_url)
+        .header("User-Agent", app_user_agent())
+        .send()
+        .await
+        .map_err(|error| format!("Download failed: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Download failed with status {}", response.status()));
+    }
+    let total = response.content_length().unwrap_or(0);
+    let mut downloaded = 0u64;
+    let started_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut file = tokio::fs::File::create(&part)
+        .await
+        .map_err(|error| format!("Create file failed: {error}"))?;
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| format!("Read download failed: {error}"))?
+    {
+        if check_cancel(app.state()) {
+            drop(file);
+            let _ = tokio::fs::remove_file(&part).await;
+            emit_progress(app, &safe_name, downloaded, total, "cancelled", started_at);
+            return Err("Download cancelled".into());
+        }
+        file.write_all(&chunk)
+            .await
+            .map_err(|error| format!("Write file failed: {error}"))?;
+        downloaded += chunk.len() as u64;
+        emit_progress(app, &safe_name, downloaded, total, "downloading", started_at);
+    }
+    file.flush()
+        .await
+        .map_err(|error| format!("Flush file failed: {error}"))?;
+    drop(file);
+    if target.exists() {
+        tokio::fs::remove_file(&target)
+            .await
+            .map_err(|error| format!("Replace existing file failed: {error}"))?;
+    }
+    tokio::fs::rename(&part, &target)
+        .await
+        .map_err(|error| format!("Save download failed: {error}"))?;
+    emit_progress(app, &safe_name, downloaded, total, "completed", started_at);
+    Ok(safe_name)
+}
+
 #[tauri::command]
 async fn list_java_releases(vendor: Option<String>) -> Result<Vec<JavaRelease>, String> {
     let vendor_code = vendor.unwrap_or_else(|| "eclipse".into());
