@@ -162,6 +162,17 @@ export type CoreTypeInfo = {
   recommend: boolean;
 };
 
+const FALLBACK_SERVER_CORES: CoreInfo[] = [
+  { name: "Paper", tag: "pure", recommend: true, mcVersions: ["26.2", "1.21.8", "1.21.7", "1.21.6", "1.21.5", "1.21.4", "1.20.6", "1.20.4", "1.20.1", "1.19.4"] },
+  { name: "Folia", tag: "pure", recommend: false, mcVersions: ["26.1.2", "1.21.8", "1.21.6", "1.21.5", "1.21.4", "1.20.6", "1.20.4", "1.20.2", "1.20.1", "1.19.4"] },
+  { name: "Purpur", tag: "pure", recommend: false, mcVersions: ["26.1.2", "1.21.8", "1.21.7", "1.21.6", "1.21.5", "1.21.4", "1.20.6", "1.20.4", "1.20.1", "1.19.4"] },
+  { name: "Vanilla", tag: "vanilla", recommend: false, mcVersions: ["26.2", "1.21.8", "1.21.7", "1.21.6", "1.21.5", "1.21.4", "1.20.6", "1.20.4", "1.20.1", "1.19.4"] },
+  { name: "Fabric", tag: "mod", recommend: false, mcVersions: ["26.2", "1.21.8", "1.21.7", "1.21.6", "1.21.5", "1.21.4", "1.20.6", "1.20.4", "1.20.1", "1.19.4"] },
+  { name: "Forge", tag: "mod", recommend: false, mcVersions: ["26.1.2", "1.21.8", "1.21.7", "1.21.6", "1.21.5", "1.21.4", "1.20.6", "1.20.4", "1.20.1", "1.19.4"] },
+  { name: "Velocity", tag: "proxy", recommend: false, mcVersions: ["3.5.0", "3.4.0", "3.3.0", "3.2.0", "3.1.2"] },
+  { name: "BungeeCord", tag: "proxy", recommend: false, mcVersions: ["general"] },
+];
+
 export const isTauriRuntime = () =>
   typeof (window as typeof window & { __TAURI_INTERNALS__?: { invoke?: unknown } })
     .__TAURI_INTERNALS__?.invoke === "function";
@@ -361,17 +372,40 @@ export async function updatePlayer(instancePath: string, action: string, name: s
 
 export async function listServerCores(): Promise<CoreInfo[]> {
   if (isTauriRuntime()) return invoke("list_server_cores");
-  return webInvoke("list_server_cores");
+  try {
+    return await webInvoke("list_server_cores");
+  } catch {
+    return FALLBACK_SERVER_CORES;
+  }
 }
 
 export async function listCoreBuilds(coreName: string, mcVersion: string): Promise<BuildInfo[]> {
   if (isTauriRuntime()) return invoke("list_core_builds", { coreName, mcVersion });
-  return webInvoke("list_core_builds", { coreName, mcVersion });
+  try {
+    return await webInvoke("list_core_builds", { coreName, mcVersion });
+  } catch {
+    return [];
+  }
 }
 
 export async function downloadServerCore(instancePath: string, coreName: string, mcVersion: string, build: string): Promise<string> {
   if (isTauriRuntime()) return invoke("download_server_core", { instancePath, coreName, mcVersion, build });
   return webInvoke("download_server_core", { instancePath, coreName, mcVersion, build });
+}
+
+export async function listOfficialCoreVersions(coreName: string): Promise<string[]> {
+  if (isTauriRuntime()) return invoke("list_official_core_versions", { coreName });
+  return [];
+}
+
+export async function listOfficialCoreBuilds(coreName: string, mcVersion: string): Promise<BuildInfo[]> {
+  if (isTauriRuntime()) return invoke("list_official_core_builds", { coreName, mcVersion });
+  return [];
+}
+
+export async function downloadOfficialServerCore(instancePath: string, coreName: string, mcVersion: string, build: string): Promise<string> {
+  if (isTauriRuntime()) return invoke("download_official_server_core", { instancePath, coreName, mcVersion, build });
+  return webInvoke("download_official_server_core", { instancePath, coreName, mcVersion, build });
 }
 
 export async function getMetrics(): Promise<ServerMetrics> {
@@ -412,11 +446,17 @@ export async function getModrinthVersions(projectId: string): Promise<PluginVers
 
 export async function getCoreTypes(): Promise<CoreTypeInfo[]> {
   if (isTauriRuntime()) return invoke("get_core_types");
-  return [];
+  const cores = await listServerCores();
+  return cores.map(core => ({
+    name: core.name,
+    label: core.name,
+    category: core.tag || "pure",
+    recommend: core.recommend,
+  }));
 }
 
-export async function listJavaReleases(): Promise<JavaRelease[]> {
-  if (isTauriRuntime()) return invoke("list_java_releases");
+export async function listJavaReleases(vendor?: string): Promise<JavaRelease[]> {
+  if (isTauriRuntime()) return invoke("list_java_releases", { vendor: vendor || null });
   return [];
 }
 
@@ -429,6 +469,19 @@ export async function downloadJava(downloadUrl: string, fileName: string): Promi
 export async function searchSpiget(query: string): Promise<SpigetResource[]> {
   if (isTauriRuntime()) return invoke("search_spiget", { query });
   return webInvoke("search_spiget", { query });
+}
+
+export async function searchSpigetAsPlugin(query: string): Promise<PluginInfo[]> {
+  const resources = await searchSpiget(query);
+  return resources.map(r => ({
+    name: r.name,
+    title: r.name,
+    description: r.description || "",
+    iconUrl: r.iconUrl || "",
+    downloads: r.downloads,
+    categories: [r.tag],
+    projectId: String(r.id),
+  }));
 }
 
 export async function cancelDownload(): Promise<void> {

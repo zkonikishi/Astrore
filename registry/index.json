@@ -1,4 +1,41 @@
 {
   "schemaVersion": 1,
-  "extensions": []
+  "extensions": [
+    {
+      "id": "i18n-translator",
+      "name": "本地化翻译",
+      "version": "1.0.0",
+      "description": "为 Astrore 软件界面提供多语言翻译支持。",
+      "author": "zkonikishi",
+      "runtime": "external-mcp",
+      "downloadUrl": "https://zkonikishi.github.io/Astrore-docs/registry/packages/i18n-translator-1.0.0.tar.gz",
+      "sha256": "d2e783f447a9ab81e99ffb949f038695a032373e4acfdf63be53c4d49317ad31",
+      "size": 3950,
+      "homepage": "https://github.com/zkonikishi/Astrore/tree/main/extensions/i18n-translator",
+      "sourceUrl": "https://github.com/zkonikishi/Astrore/tree/main/extensions/i18n-translator",
+      "permissions": [
+        "ui.translate"
+      ],
+      "verified": true
+    },
+    {
+      "id": "qqbot-mcp",
+      "name": "QQ 机器人",
+      "version": "1.0.0",
+      "description": "通过 QQ 机器人远程管理 Minecraft 服务器。",
+      "author": "zkonikishi",
+      "runtime": "external-mcp",
+      "downloadUrl": "https://zkonikishi.github.io/Astrore-docs/registry/packages/qqbot-mcp-1.0.0.tar.gz",
+      "sha256": "ba935493506b244aacdbbdfc47614fb17bbda3e96d7320ed7ce5b5ef248c0e14",
+      "size": 2985,
+      "homepage": "https://github.com/zkonikishi/Astrore/tree/main/extensions/qqbot-mcp",
+      "sourceUrl": "https://github.com/zkonikishi/Astrore/tree/main/extensions/qqbot-mcp",
+      "permissions": [
+        "server.status",
+        "server.command",
+        "server.players"
+      ],
+      "verified": true
+    }
+  ]
 }

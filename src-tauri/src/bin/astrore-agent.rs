@@ -24,6 +24,10 @@ use tokio::{
 };
 use tower_http::{cors::CorsLayer, services::ServeDir};
 
+fn agent_user_agent() -> String {
+    format!("Astrore-Agent/{}", env!("CARGO_PKG_VERSION"))
+}
+
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -585,7 +589,7 @@ async fn invoke(command: &str, args: Value, state: &AgentState) -> Result<Value,
             let mut call = reqwest::Client::new()
                 .post(url)
                 .timeout(std::time::Duration::from_secs(120))
-                .header("User-Agent", "Astrore-Agent/0.2")
+                .header("User-Agent", agent_user_agent())
                 .json(&json!({
                 "model": request.get("model").and_then(Value::as_str).ok_or("缺少模型名称")?,
                 "messages": request.get("messages").and_then(Value::as_array).ok_or("缺少对话内容")?,
@@ -675,7 +679,7 @@ async fn invoke(command: &str, args: Value, state: &AgentState) -> Result<Value,
         }
         "cancel_download" => Ok(Value::Null),
         "list_server_cores" => {
-            let data: Value = reqwest::Client::new().get("https://download.fastmirror.net/api/v3").header("User-Agent", "Astrore-Agent/0.2")
+            let data: Value = reqwest::Client::new().get("https://download.fastmirror.net/api/v3").header("User-Agent", agent_user_agent())
                 .send().await.map_err(|error| error.to_string())?.error_for_status().map_err(|error| error.to_string())?
                 .json().await.map_err(|error| error.to_string())?;
             Ok(Value::Array(data["data"].as_array().into_iter().flatten().map(|item| json!({
@@ -686,7 +690,7 @@ async fn invoke(command: &str, args: Value, state: &AgentState) -> Result<Value,
             let core = args.get("coreName").and_then(Value::as_str).ok_or("缺少核心名称")?;
             let version = args.get("mcVersion").and_then(Value::as_str).ok_or("缺少 Minecraft 版本")?;
             let data: Value = reqwest::Client::new().get(format!("https://download.fastmirror.net/api/v3/{core}/{version}"))
-                .query(&[("offset", 0), ("limit", 30)]).header("User-Agent", "Astrore-Agent/0.2")
+                .query(&[("offset", 0), ("limit", 30)]).header("User-Agent", agent_user_agent())
                 .send().await.map_err(|error| error.to_string())?.error_for_status().map_err(|error| error.to_string())?
                 .json().await.map_err(|error| error.to_string())?;
             Ok(Value::Array(data["data"]["builds"].as_array().into_iter().flatten().map(|item| json!({
@@ -699,12 +703,12 @@ async fn invoke(command: &str, args: Value, state: &AgentState) -> Result<Value,
             let version = args.get("mcVersion").and_then(Value::as_str).ok_or("缺少 Minecraft 版本")?;
             let build = args.get("build").and_then(Value::as_str).ok_or("缺少构建版本")?;
             let data: Value = reqwest::Client::new().get(format!("https://download.fastmirror.net/api/v3/{core}/{version}/{build}"))
-                .header("User-Agent", "Astrore-Agent/0.2").send().await.map_err(|error| error.to_string())?
+                .header("User-Agent", agent_user_agent()).send().await.map_err(|error| error.to_string())?
                 .error_for_status().map_err(|error| error.to_string())?.json().await.map_err(|error| error.to_string())?;
             let url = data["data"]["download_url"].as_str().ok_or("下载地址不存在")?;
             let name = data["data"]["filename"].as_str().filter(|name| !name.contains(['/', '\\'])).map(str::to_string)
                 .unwrap_or_else(|| format!("{core}-{version}-{build}.jar"));
-            let bytes = reqwest::Client::new().get(url).header("User-Agent", "Astrore-Agent/0.2").send().await.map_err(|error| error.to_string())?
+            let bytes = reqwest::Client::new().get(url).header("User-Agent", agent_user_agent()).send().await.map_err(|error| error.to_string())?
                 .error_for_status().map_err(|error| error.to_string())?.bytes().await.map_err(|error| error.to_string())?;
             fs::write(root.join(&name), bytes).map_err(|error| error.to_string())?;
             Ok(json!(name))
@@ -715,7 +719,7 @@ async fn invoke(command: &str, args: Value, state: &AgentState) -> Result<Value,
             let project_type = if kind == "mods" { "mod" } else { "plugin" };
             let facets = format!("[[\"project_type:{project_type}\"]]");
             let data: Value = reqwest::Client::new().get("https://api.modrinth.com/v2/search")
-                .query(&[("query", query), ("facets", facets.as_str()), ("limit", "30")]).header("User-Agent", "Astrore-Agent/0.2")
+                .query(&[("query", query), ("facets", facets.as_str()), ("limit", "30")]).header("User-Agent", agent_user_agent())
                 .send().await.map_err(|error| error.to_string())?.error_for_status().map_err(|error| error.to_string())?
                 .json().await.map_err(|error| error.to_string())?;
             Ok(Value::Array(data["hits"].as_array().into_iter().flatten().map(|item| json!({
@@ -726,7 +730,7 @@ async fn invoke(command: &str, args: Value, state: &AgentState) -> Result<Value,
         "get_modrinth_versions" => {
             let project = args.get("projectId").and_then(Value::as_str).ok_or("缺少项目 ID")?;
             let data: Value = reqwest::Client::new().get(format!("https://api.modrinth.com/v2/project/{project}/version"))
-                .header("User-Agent", "Astrore-Agent/0.2").send().await.map_err(|error| error.to_string())?
+                .header("User-Agent", agent_user_agent()).send().await.map_err(|error| error.to_string())?
                 .error_for_status().map_err(|error| error.to_string())?.json().await.map_err(|error| error.to_string())?;
             Ok(Value::Array(data.as_array().into_iter().flatten().filter_map(|item| {
                 let file = item["files"].as_array()?.iter().find(|file| file["primary"].as_bool().unwrap_or(false)).or_else(|| item["files"].as_array()?.first())?;
@@ -743,7 +747,7 @@ async fn invoke(command: &str, args: Value, state: &AgentState) -> Result<Value,
             let url = reqwest::Url::parse(args.get("downloadUrl").and_then(Value::as_str).ok_or("缺少下载地址")?).map_err(|error| error.to_string())?;
             let host = url.host_str().ok_or("下载地址缺少主机名")?;
             if url.scheme() != "https" || !(host == "modrinth.com" || host.ends_with(".modrinth.com")) { return Err("只允许从 Modrinth HTTPS 地址下载".into()); }
-            let bytes = reqwest::Client::new().get(url).header("User-Agent", "Astrore-Agent/0.2").send().await.map_err(|error| error.to_string())?
+            let bytes = reqwest::Client::new().get(url).header("User-Agent", agent_user_agent()).send().await.map_err(|error| error.to_string())?
                 .error_for_status().map_err(|error| error.to_string())?.bytes().await.map_err(|error| error.to_string())?;
             let directory = root.join(kind);
             fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
@@ -755,7 +759,7 @@ async fn invoke(command: &str, args: Value, state: &AgentState) -> Result<Value,
             let url = format!("https://api.spiget.org/v2/search/resources/{query}?size=20&sort=-downloads&fields=id,name,tag,description,icon,downloads,rating,author,version");
             let data: Value = reqwest::Client::new()
                 .get(&url)
-                .header("User-Agent", "Astrore-Agent/0.2")
+                .header("User-Agent", agent_user_agent())
                 .send().await.map_err(|error| format!("搜索失败: {error}"))?
                 .error_for_status().map_err(|error| format!("Spiget 返回错误: {error}"))?
                 .json().await.map_err(|error| format!("解析失败: {error}"))?;
@@ -780,7 +784,7 @@ async fn invoke(command: &str, args: Value, state: &AgentState) -> Result<Value,
             fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
             let bytes = reqwest::Client::new()
                 .get(format!("https://api.spiget.org/v2/resources/{resource_id}/download"))
-                .header("User-Agent", "Astrore-Agent/0.2")
+                .header("User-Agent", agent_user_agent())
                 .send().await.map_err(|error| format!("下载失败: {error}"))?
                 .error_for_status().map_err(|error| format!("Spiget 返回错误: {error}"))?
                 .bytes().await.map_err(|error| format!("读取失败: {error}"))?;

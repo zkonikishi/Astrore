@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Archive, ArrowLeft, Ban, Check, Download, FileCog, FileText, Folder, Pencil, Plus, RefreshCw, RotateCcw, Save, Search, Shield, Star, Trash2, User, UserPlus, X, XCircle } from "lucide-react";
+import { Archive, ArrowLeft, Ban, Check, Download, ExternalLink, FileCog, FileText, Folder, Pencil, Plus, RefreshCw, RotateCcw, Save, Search, Shield, Star, Trash2, User, UserPlus, X, XCircle } from "lucide-react";
 import {
   callExtensionTool,
   cancelDownload,
@@ -21,6 +21,9 @@ import {
   listDirectory,
   listServerCores,
   listCoreBuilds,
+  listOfficialCoreVersions,
+  listOfficialCoreBuilds,
+  downloadOfficialServerCore,
   listBackups,
   readPlayerLists,
   readProperties,
@@ -30,6 +33,7 @@ import {
   scanExtensions,
   searchSpiget,
   searchModrinth,
+  searchSpigetAsPlugin,
   startExtension,
   stopExtension,
   toggleEntry,
@@ -53,6 +57,10 @@ import {
 } from "./bridge";
 
 type CommonProps = { instancePath: string; onError: (message: string) => void };
+
+const OFFICIAL_EXTENSION_REGISTRY = "https://zkonikishi.github.io/Astrore-docs/registry/index.json";
+const LEGACY_EXTENSION_REGISTRY = "https://raw.githubusercontent.com/zkonikishi/Astrore/main/registry/index.json";
+const WEB_PREVIEW_EXTENSION_REGISTRY = "/registry/index.json";
 
 const sizeLabel = (size: number) =>
   size < 1024 ? `${size} B` : size < 1024 ** 2 ? `${(size / 1024).toFixed(1)} KB` : `${(size / 1024 ** 2).toFixed(1)} MB`;
@@ -118,8 +126,13 @@ export function ExtensionStoreView({ onError }: { onError: (msg: string) => void
   const [extensions, setExtensions] = useState<McpExtensionInfo[]>([]);
   const [catalog, setCatalog] = useState<RegistryExtension[]>([]);
   const [view, setView] = useState<"installed" | "catalog">("installed");
-  const [registryUrl, setRegistryUrl] = useState(() => localStorage.getItem("astrore.extensions.registry") ?? "https://raw.githubusercontent.com/zkonikishi/Astrore/main/registry/index.json");
+  const [registryUrl, setRegistryUrl] = useState(() => {
+    const saved = localStorage.getItem("astrore.extensions.registry");
+    return !saved || saved === LEGACY_EXTENSION_REGISTRY ? OFFICIAL_EXTENSION_REGISTRY : saved;
+  });
   const [busy, setBusy] = useState("");
+  const [catalogStatus, setCatalogStatus] = useState("等待检查更新");
+  const [lastCatalogCheck, setLastCatalogCheck] = useState("");
   const [selectedTool, setSelectedTool] = useState<{ extensionId: string; tool: McpTool; author: string } | null>(null);
   const [toolArgs, setToolArgs] = useState("{}");
   const [toolResult, setToolResult] = useState("");
@@ -128,19 +141,40 @@ export function ExtensionStoreView({ onError }: { onError: (msg: string) => void
     initExtensionManager().then(() => scanExtensions()).then(setExtensions).catch(e => onError(String(e)));
   }, [onError]);
   useEffect(() => { load(); }, [load]);
-  useEffect(() => {
-    fetchExtensionRegistry(registryUrl.trim()).then(setCatalog).catch(() => undefined);
-  }, []);
 
-  const loadCatalog = async () => {
+  const loadCatalog = useCallback(async () => {
     setBusy("registry");
+    setCatalogStatus("正在检查更新...");
+    const requestedUrl = registryUrl.trim() || OFFICIAL_EXTENSION_REGISTRY;
+    const useOfficialFallbacks = requestedUrl === OFFICIAL_EXTENSION_REGISTRY || requestedUrl === LEGACY_EXTENSION_REGISTRY;
+    const candidates = [
+      { url: requestedUrl, label: "当前源" },
+      ...(useOfficialFallbacks && !isTauriRuntime() ? [{ url: WEB_PREVIEW_EXTENSION_REGISTRY, label: "本地预览源" }] : []),
+      ...(useOfficialFallbacks ? [{ url: LEGACY_EXTENSION_REGISTRY, label: "备用源" }] : []),
+    ].filter((candidate, index, list) => list.findIndex(item => item.url === candidate.url) === index);
+    let lastError: unknown = null;
     try {
-      const entries = await fetchExtensionRegistry(registryUrl.trim());
-      setCatalog(entries);
-      localStorage.setItem("astrore.extensions.registry", registryUrl.trim());
-    } catch (error) { onError(String(error)); }
-    setBusy("");
-  };
+      for (const candidate of candidates) {
+        try {
+          const entries = await fetchExtensionRegistry(candidate.url);
+          setCatalog(entries);
+          localStorage.setItem("astrore.extensions.registry", requestedUrl === LEGACY_EXTENSION_REGISTRY ? OFFICIAL_EXTENSION_REGISTRY : requestedUrl);
+          setLastCatalogCheck(new Date().toLocaleString());
+          setCatalogStatus(candidate.url === requestedUrl ? `已获取 ${entries.length} 个扩展` : `主站暂不可用，已从${candidate.label}获取 ${entries.length} 个扩展`);
+          return;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      throw lastError;
+    } catch (error) {
+      setCatalogStatus("检查失败");
+      onError(String(error));
+    } finally {
+      setBusy("");
+    }
+  }, [registryUrl, onError]);
+  useEffect(() => { loadCatalog(); }, []);
 
   const toggle = async (ext: McpExtensionInfo) => {
     setBusy(ext.id);
@@ -182,6 +216,9 @@ export function ExtensionStoreView({ onError }: { onError: (msg: string) => void
     const b = parts(current);
     return [0, 1, 2].some(index => a[index] !== b[index] && a[index] > b[index] && a.slice(0, index).every((part, i) => part === b[i]));
   };
+  const updateEntries = extensions
+    .map(extension => catalog.find(entry => entry.id === extension.id && isNewer(entry.version, extension.version)))
+    .filter((entry): entry is RegistryExtension => Boolean(entry));
 
   const callTool = async () => {
     if (!selectedTool) return;
@@ -198,22 +235,25 @@ export function ExtensionStoreView({ onError }: { onError: (msg: string) => void
     <div className="manager-toolbar">
       <strong>扩展商店</strong>
       <div className="segmented"><button className={view === "installed" ? "active" : ""} onClick={() => setView("installed")}>已安装</button><button className={view === "catalog" ? "active" : ""} onClick={() => setView("catalog")}>在线商店</button></div>
-      <span>{view === "installed" ? `${extensions.length} 个扩展` : `${catalog.length} 个条目`}</span>
-      <button className="icon-btn" onClick={load}><RefreshCw /></button>
+      <span>{view === "installed" ? `${extensions.length} 个扩展${updateEntries.length ? ` · ${updateEntries.length} 个可更新` : ""}` : `${catalog.length} 个条目`}</span>
+      <button className="icon-btn" onClick={() => { load(); loadCatalog(); }} title="刷新并检查更新"><RefreshCw /></button>
     </div>
     <div className="market-hero" style={{ minHeight: 80 }}>
       <strong>安全扩展平台</strong>
       <span>WASI 扩展将运行在沙箱中；外部 MCP 扩展拥有更高风险，启动前必须确认权限。</span>
     </div>
     {view === "catalog" ? <div className="extension-catalog">
-      <div className="registry-bar"><Shield /><input value={registryUrl} onChange={event => setRegistryUrl(event.target.value)} placeholder="HTTPS 扩展注册表地址" /><button className="primary" disabled={busy === "registry"} onClick={loadCatalog}><RefreshCw />获取商店</button></div>
-      <div className="plugin-list-real">{catalog.map(entry => {
+      <div className="registry-bar"><Shield /><input value={registryUrl} onChange={event => setRegistryUrl(event.target.value)} placeholder="HTTPS 扩展注册表地址" /><button className="primary" disabled={busy === "registry"} onClick={loadCatalog}><RefreshCw />检查更新</button></div>
+      <div className="registry-status"><span>{catalogStatus}</span>{lastCatalogCheck && <span>上次检查：{lastCatalogCheck}</span>}</div>
+      <div className="extension-card-grid">{catalog.map(entry => {
         const installed = extensions.find(extension => extension.id === entry.id);
         const update = installed && isNewer(entry.version, installed.version);
         return <div key={entry.id}>
           <div className={`plugin-state ${entry.verified ? "enabled" : ""}`}>{entry.verified ? <Check /> : <Shield />}</div>
           <div><strong>{entry.name}</strong><span>{entry.description}</span><span className="ext-meta">{entry.verified ? "已验证" : "第三方"} · {entry.runtime === "wasi" ? "WASI 沙箱" : "外部 MCP"} · v{entry.version} · {sizeLabel(entry.size)}</span></div>
-          <button className="primary" disabled={busy === entry.id || Boolean(installed && !update)} onClick={() => install(entry)}><Download />{update ? "更新" : installed ? "已安装" : "安装"}</button>
+          <div className="extension-card-actions">
+            <button className="primary" disabled={busy === entry.id || Boolean(installed && !update)} onClick={() => install(entry)}><Download />{update ? "更新" : installed ? "已安装" : "安装"}</button>
+          </div>
         </div>;
       })}{catalog.length === 0 && <Empty text="填写 HTTPS 注册表地址后获取在线扩展" />}</div>
     </div> : selectedTool ? (
@@ -233,22 +273,28 @@ export function ExtensionStoreView({ onError }: { onError: (msg: string) => void
         </div>
       </div>
     ) : (
-      <div className="plugin-list-real">
-        {extensions.map(ext => (
-          <div key={ext.id}>
+      <div className="extension-installed">
+        <div className="registry-status"><span>{catalogStatus}</span>{lastCatalogCheck && <span>上次检查：{lastCatalogCheck}</span>}{updateEntries.length > 0 && <button className="primary" onClick={() => setView("catalog")}>查看可更新</button>}</div>
+        <div className="extension-card-grid">
+        {extensions.map(ext => {
+          const updateEntry = catalog.find(entry => entry.id === ext.id && isNewer(entry.version, ext.version));
+          return <div key={ext.id}>
             <div className={`plugin-state ${ext.running ? "enabled" : ""}`}>{ext.running ? <Check /> : <X />}</div>
             <div><strong>{ext.name}</strong><span>{ext.description}</span><span className="ext-meta"><User size={12} /> {ext.author} · v{ext.version} · {ext.runtime === "wasi" ? "WASI 沙箱" : "外部 MCP 高风险"} · {ext.permissions.join("、") || "无权限"}</span></div>
-            {catalog.find(entry => entry.id === ext.id && isNewer(entry.version, ext.version)) && <button className="primary" onClick={() => install(catalog.find(entry => entry.id === ext.id && isNewer(entry.version, ext.version))!)}><Download />更新</button>}
-            <button className="secondary" onClick={() => toggle(ext)} disabled={busy === ext.id}>{busy === ext.id ? "..." : ext.running ? "停止" : "启动"}</button>
-            <button className="icon-btn" onClick={() => { if (confirm(`确定卸载 ${ext.name}？`)) { uninstallExtension(ext.id).then(load).catch(e => onError(String(e))); } }} title="卸载"><Trash2 size={14} /></button>
+            <div className="extension-card-actions">
+              {updateEntry && <button className="primary" onClick={() => install(updateEntry)}><Download />更新</button>}
+              <button className="secondary" onClick={() => toggle(ext)} disabled={busy === ext.id}>{busy === ext.id ? "..." : ext.running ? "停止" : "启动"}</button>
+              <button className="icon-btn" onClick={() => { if (confirm(`确定卸载 ${ext.name}？`)) { uninstallExtension(ext.id).then(load).catch(e => onError(String(e))); } }} title="卸载"><Trash2 size={14} /></button>
+            </div>
             {ext.tools.length > 0 && <div className="segmented" style={{ marginLeft: 8 }}>
               {ext.tools.map(t => (
                 <button key={t.name} className="secondary" onClick={() => { setSelectedTool({ extensionId: ext.id, tool: t, author: ext.author }); setToolArgs("{}"); setToolResult(""); }} style={{ fontSize: 10 }}>{t.name}</button>
               ))}
             </div>}
-          </div>
-        ))}
+          </div>;
+        })}
         {extensions.length === 0 && <Empty text="暂无扩展，将扩展放入 extensions 目录后刷新" />}
+        </div>
       </div>
     )}
   </section>;
@@ -442,8 +488,8 @@ export function JavaDownloadView({ onError }: { onError: (msg: string) => void }
   const [progress, setProgress] = useState<DownloadProgress | null>(null);
   const [vendor, setVendor] = useState("temurin");
   const load = useCallback(() => {
-    listJavaReleases().then(setReleases).catch(e => onError(String(e)));
-  }, [onError]);
+    listJavaReleases(vendor).then(setReleases).catch(e => onError(String(e)));
+  }, [onError, vendor]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
     if (!isTauriRuntime()) return;
@@ -458,6 +504,8 @@ export function JavaDownloadView({ onError }: { onError: (msg: string) => void }
     } catch (e) { onError(String(e)); setProgress(null); }
   };
 
+  const vendorLabel = { temurin: "Eclipse Adoptium Temurin", microsoft: "Microsoft Build of OpenJDK", zulu: "Azul Zulu", graalvm: "GraalVM Community" }[vendor] ?? vendor;
+
   return <section className="panel manager-panel">
     <div className="manager-toolbar"><Download /><strong>Java 运行时下载</strong><span>{releases.length} 个版本</span><button className="icon-btn" onClick={load}><RefreshCw /></button></div>
     <div className="download-filter-row">
@@ -465,7 +513,7 @@ export function JavaDownloadView({ onError }: { onError: (msg: string) => void }
       <label>推荐版本<select defaultValue="21"><option value="8">Java 8</option><option value="17">Java 17</option><option value="21">Java 21</option><option value="25">Java 25</option></select></label>
     </div>
     <div className="market-hero" style={{ minHeight: 120 }}>
-      <strong>{vendor === "temurin" ? "Eclipse Adoptium Temurin JDK 21" : "更多 Java 厂商即将接入"}</strong>
+      <strong>{vendorLabel} JDK 21</strong>
       <span>Java 21 是 Minecraft 1.20.5+ 的推荐版本。下载后可安装到系统，或在实例配置里填写 Java 可执行文件路径。</span>
     </div>
     <div className="plugin-list-real">
@@ -573,6 +621,7 @@ export function CoreTypeView({ instancePath, onError }: CommonProps) {
   const [build, setBuild] = useState("");
   const [progress, setProgress] = useState<DownloadProgress | null>(null);
   const [category, setCategory] = useState("all");
+  const [source, setSource] = useState<"fastmirror" | "official">("fastmirror");
 
   const loadTypes = useCallback(() => {
     getCoreTypes().then(items => { setCoreTypes(items); if (items[0]) setCoreName(items[0].name); }).catch(e => onError(String(e)));
@@ -598,6 +647,10 @@ export function CoreTypeView({ instancePath, onError }: CommonProps) {
   }, []);
 
   const filtered = category === "all" ? coreTypes : coreTypes.filter(c => c.category === category);
+  const fastMirrorUrl = coreName && version
+    ? `https://www.fastmirror.net/#/download/${encodeURIComponent(coreName)}?coreVersion=${encodeURIComponent(version)}`
+    : "https://www.fastmirror.net/#/download";
+  const openFastMirror = () => window.open(fastMirrorUrl, "_blank", "noopener,noreferrer");
 
   const download = (useLatest = false) => {
     if (!instancePath) return onError("请先配置实例目录");
@@ -622,10 +675,16 @@ export function CoreTypeView({ instancePath, onError }: CommonProps) {
       <label>核心类型<select value={coreName} onChange={e => setCoreName(e.target.value)}>{filtered.map(c => <option key={c.name} value={c.name}>{c.label}</option>)}</select></label>
       <label>Minecraft 版本<select value={version} onChange={e => setVersion(e.target.value)}>{versions.map((v: string) => <option key={v}>{v}</option>)}</select></label>
       <label>构建版本<select value={build} onChange={e => setBuild(e.target.value)}>{builds.map(item => <option key={item.coreVersion} value={item.coreVersion}>{item.coreVersion} · {item.updateTime.slice(0, 10)}</option>)}</select></label>
+      {coreName && version && builds.length === 0 && (
+        <div className="download-source-hint">
+          <strong>FastMirror</strong>
+          <span>当前环境没有可用的本地 Agent，已保留核心与版本选择，可打开下载源手动下载。桌面端会通过后端直接下载到实例目录。</span>
+        </div>
+      )}
       <div className="download-buttons">
         <button className="primary" disabled={!build || progress?.status === "downloading"} onClick={() => download(false)}><Download />下载选中构建</button>
         <button className="secondary" disabled={!builds[0] || progress?.status === "downloading"} onClick={() => download(true)}>下载最新构建</button>
-
+        <button className="secondary" onClick={openFastMirror} disabled={!coreName || !version}><ExternalLink size={14} />FastMirror</button>
       </div>
     </div>
     <div className="panel download-status">
@@ -639,6 +698,7 @@ function Empty({ text }: { text: string }) { return <div className="empty-state"
 
 export function PluginMarketView({ instancePath, onError, kind: fixedKind }: CommonProps & { kind?: "plugins" | "mods" }) {
   const [kind, setKind] = useState<"plugins" | "mods">(fixedKind ?? "plugins");
+  const [source, setSource] = useState<"modrinth" | "spiget">("modrinth");
   const [query, setQuery] = useState("");
   const [gameVersion, setGameVersion] = useState("");
   const [loader, setLoader] = useState("");
@@ -648,13 +708,17 @@ export function PluginMarketView({ instancePath, onError, kind: fixedKind }: Com
   const [selected, setSelected] = useState<PluginInfo | null>(null);
   const [versions, setVersions] = useState<PluginVersion[]>([]);
   const [progress, setProgress] = useState<DownloadProgress | null>(null);
+  const [popular, setPopular] = useState<PluginInfo[]>([]);
 
   const search = async () => {
     setSearching(true);
     try {
-      const terms = [query.trim() || "popular", gameVersion, loader, sort !== "relevance" ? sort : ""].filter(Boolean).join(" ");
-      const items = await searchModrinth(terms, kind);
-      setResults(items);
+      if (source === "modrinth") {
+        const terms = [query.trim() || "popular", gameVersion, loader, sort !== "relevance" ? sort : ""].filter(Boolean).join(" ");
+        setResults(await searchModrinth(terms, kind));
+      } else {
+        setResults(await searchSpigetAsPlugin(query.trim() || "popular"));
+      }
       setSelected(null);
       setVersions([]);
     } catch (e) { onError(String(e)); }
@@ -662,13 +726,21 @@ export function PluginMarketView({ instancePath, onError, kind: fixedKind }: Com
   };
 
   useEffect(() => { if (fixedKind) setKind(fixedKind); }, [fixedKind]);
-  useEffect(() => { search(); }, [kind]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    search();
+    if (popular.length === 0) {
+      const loadPopular = source === "modrinth"
+        ? searchModrinth("popular", kind)
+        : searchSpigetAsPlugin("popular");
+      loadPopular.then(items => setPopular(items.slice(0, 8))).catch(() => {});
+    }
+  }, [kind, source]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectProject = async (project: PluginInfo) => {
     setSelected(project);
-    try {
-      setVersions(await getModrinthVersions(project.projectId));
-    } catch (e) { onError(String(e)); }
+    if (source === "modrinth") {
+      try { setVersions(await getModrinthVersions(project.projectId)); } catch (e) { onError(String(e)); }
+    }
   };
 
   useEffect(() => {
@@ -686,25 +758,31 @@ export function PluginMarketView({ instancePath, onError, kind: fixedKind }: Com
     } catch (e) { onError(String(e)); setProgress(null); }
   };
 
+  const showPopular = !query.trim() && !selected;
+
   return <section className="panel manager-panel">
     <div className="manager-toolbar">
       {!fixedKind && <div className="segmented">
-        <button className={kind === "plugins" ? "active" : ""} onClick={() => { setKind("plugins"); setResults([]); setSelected(null); }}>插件</button>
-        <button className={kind === "mods" ? "active" : ""} onClick={() => { setKind("mods"); setResults([]); setSelected(null); }}>模组</button>
+        <button className={kind === "plugins" ? "active" : ""} onClick={() => { setKind("plugins"); setResults([]); setSelected(null); setPopular([]); }}>插件</button>
+        <button className={kind === "mods" ? "active" : ""} onClick={() => { setKind("mods"); setResults([]); setSelected(null); setPopular([]); }}>模组</button>
       </div>}
       {fixedKind && <strong>{fixedKind === "plugins" ? "插件下载" : "模组下载"}</strong>}
-      <div className="search" style={{ width: 220, marginLeft: 8 }}>
+      <div className="segmented" style={{ marginLeft: 8 }}>
+        <button className={source === "modrinth" ? "active" : ""} onClick={() => { setSource("modrinth"); setResults([]); setSelected(null); setPopular([]); }}>Modrinth</button>
+        <button className={source === "spiget" ? "active" : ""} onClick={() => { setSource("spiget"); setResults([]); setSelected(null); setPopular([]); }}>Spiget</button>
+      </div>
+      <div className="search" style={{ width: 200, marginLeft: 8 }}>
         <Search size={14} />
         <input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && search()} placeholder={`搜索 ${kind === "plugins" ? "插件" : "模组"}...`} />
       </div>
       <button className="primary" onClick={search} disabled={searching}>{searching ? "搜索中..." : "搜索"}</button>
       <span style={{ marginLeft: "auto" }}>{results.length} 个结果</span>
     </div>
-    <div className="download-filter-row">
+    {source === "modrinth" && <div className="download-filter-row">
       <label>Minecraft 版本<input value={gameVersion} onChange={event => setGameVersion(event.target.value)} onKeyDown={event => event.key === "Enter" && search()} placeholder="例如 1.21.8" /></label>
       <label>加载器<select value={loader} onChange={event => setLoader(event.target.value)}><option value="">全部</option><option value="paper">Paper</option><option value="spigot">Spigot</option><option value="fabric">Fabric</option><option value="forge">Forge</option><option value="neoforge">NeoForge</option></select></label>
       <label>排序<select value={sort} onChange={event => setSort(event.target.value)}><option value="relevance">相关度</option><option value="downloads">下载量</option><option value="updated">最近更新</option><option value="follows">收藏数</option></select></label>
-    </div>
+    </div>}
     {!instancePath ? <Empty text="请先配置实例目录" /> : selected ? (
       <div>
         <div className="manager-toolbar">
@@ -723,16 +801,40 @@ export function PluginMarketView({ instancePath, onError, kind: fixedKind }: Com
             </div>
           </div>
         </div>
-        <div className="plugin-list-real">
-          {versions.map(v => (
-            <div key={v.versionNumber}>
-              <div className="plugin-state enabled"><Download /></div>
-              <div><strong>{v.versionNumber}</strong><span>{v.fileName} · {v.gameVersions.slice(0, 3).join(", ")} · {v.loaders.join(", ")}</span></div>
-              <button className="primary" onClick={() => download(v)} disabled={progress?.status === "downloading"}>下载</button>
+        {source === "modrinth" ? (
+          <div className="plugin-list-real">
+            {versions.map(v => (
+              <div key={v.versionNumber}>
+                <div className="plugin-state enabled"><Download /></div>
+                <div><strong>{v.versionNumber}</strong><span>{v.fileName} · {v.gameVersions.slice(0, 3).join(", ")} · {v.loaders.join(", ")}</span></div>
+                <button className="primary" onClick={() => download(v)} disabled={progress?.status === "downloading"}>下载</button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ padding: 14 }}><Empty text="Spiget 源暂不支持版本选择，请使用 Modrinth 源下载" /></div>
+        )}
+        {progress && <div className="progress-view" style={{ minHeight: 60, padding: 14 }}><strong>{progress.fileName}</strong><div className="progress-track"><i style={{ width: `${progress.percent}%` }} /></div><span>{progress.status === "completed" ? "下载完成" : `${progress.percent.toFixed(1)}%`}</span></div>}
+      </div>
+    ) : showPopular ? (
+      <div>
+        <div className="market-hero" style={{ marginBottom: 12 }}>
+          <strong>{kind === "plugins" ? "🔥 最热插件" : "🔥 最热模组"}</strong>
+          <span>来自 {source === "modrinth" ? "Modrinth" : "Spiget"} · 按下载量排序</span>
+        </div>
+        <div className="popular-grid">
+          {popular.map(item => (
+            <div key={item.projectId} className="popular-card" onClick={() => selectProject(item)}>
+              <div className="popular-icon">
+                {item.iconUrl ? <img src={item.iconUrl} alt="" /> : <Download size={28} />}
+              </div>
+              <strong>{item.title}</strong>
+              <span>{item.description.slice(0, 50)}{item.description.length > 50 ? "..." : ""}</span>
+              <small><Download size={10} /> {sizeLabel(item.downloads)}</small>
             </div>
           ))}
+          {popular.length === 0 && <Empty text="加载中..." />}
         </div>
-        {progress && <div className="progress-view" style={{ minHeight: 60, padding: 14 }}><strong>{progress.fileName}</strong><div className="progress-track"><i style={{ width: `${progress.percent}%` }} /></div><span>{progress.status === "completed" ? "下载完成" : `${progress.percent.toFixed(1)}%`}</span></div>}
       </div>
     ) : (
       <div className="plugin-list-real">

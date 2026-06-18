@@ -1,6 +1,6 @@
 [package]
 name = "astrore"
-version = "0.2.1"
+version = "0.2.2"
 description = "Astrore cross-platform Minecraft server control"
 authors = ["Astrore"]
 edition = "2021"

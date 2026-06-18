@@ -20,6 +20,14 @@ use tokio::{
 mod mcp_client;
 use mcp_client::{is_safe_extension_id, ExtensionInfo, ExtensionManager, ExtensionManifest, McpTool};
 
+fn app_user_agent() -> String {
+    format!("Astrore/{}", env!("CARGO_PKG_VERSION"))
+}
+
+fn app_user_agent_with_contact() -> String {
+    format!("Astrore/{} (zkonikishi)", env!("CARGO_PKG_VERSION"))
+}
+
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -185,7 +193,7 @@ async fn ai_chat(request: AiRequest) -> Result<String, String> {
     let mut call = reqwest::Client::new()
         .post(url)
         .timeout(std::time::Duration::from_secs(120))
-        .header("User-Agent", "Astrore/0.2")
+        .header("User-Agent", app_user_agent())
         .json(&serde_json::json!({
         "model": request.model,
         "messages": request.messages,
@@ -687,7 +695,7 @@ async fn update_player(
 async fn list_server_cores() -> Result<Vec<CoreInfo>, String> {
     let data: serde_json::Value = reqwest::Client::new()
         .get("https://download.fastmirror.net/api/v3")
-        .header("User-Agent", "Astrore/0.2")
+        .header("User-Agent", app_user_agent())
         .send()
         .await
         .map_err(|error| format!("获取核心列表失败: {error}"))?
@@ -720,7 +728,7 @@ async fn list_core_builds(core_name: String, mc_version: String) -> Result<Vec<B
     let data: serde_json::Value = reqwest::Client::new()
         .get(url)
         .query(&[("offset", 0), ("limit", 30)])
-        .header("User-Agent", "Astrore/0.2")
+        .header("User-Agent", app_user_agent())
         .send()
         .await
         .map_err(|error| format!("获取构建列表失败: {error}"))?
@@ -759,7 +767,7 @@ async fn download_server_core(
     let client = reqwest::Client::new();
     let info: serde_json::Value = client
         .get(info_url)
-        .header("User-Agent", "Astrore/0.2")
+        .header("User-Agent", app_user_agent())
         .send()
         .await
         .map_err(|error| format!("获取下载信息失败: {error}"))?
@@ -781,7 +789,7 @@ async fn download_server_core(
     let _ = tokio::fs::remove_file(&part).await;
     let mut response = client
         .get(url)
-        .header("User-Agent", "Astrore/0.2")
+        .header("User-Agent", app_user_agent())
         .send()
         .await
         .map_err(|error| format!("下载失败: {error}"))?
@@ -1248,7 +1256,7 @@ async fn search_modrinth(query: String, kind: String) -> Result<Vec<PluginInfo>,
     let data: serde_json::Value = reqwest::Client::new()
         .get("https://api.modrinth.com/v2/search")
         .query(&[("query", query.as_str()), ("limit", "20"), ("facets", facets)])
-        .header("User-Agent", "Astrore/0.2 (zkonikishi)")
+        .header("User-Agent", app_user_agent_with_contact())
         .send()
         .await
         .map_err(|e| format!("搜索失败: {e}"))?
@@ -1283,7 +1291,7 @@ async fn get_modrinth_versions(project_id: String) -> Result<Vec<PluginVersion>,
     let url = format!("https://api.modrinth.com/v2/project/{project_id}/version");
     let data: serde_json::Value = reqwest::Client::new()
         .get(&url)
-        .header("User-Agent", "Astrore/0.2 (zkonikishi)")
+        .header("User-Agent", app_user_agent_with_contact())
         .send()
         .await
         .map_err(|e| format!("获取版本失败: {e}"))?
@@ -1352,7 +1360,7 @@ async fn download_plugin(
     let _ = tokio::fs::remove_file(&part).await;
     let response = reqwest::Client::new()
         .get(url)
-        .header("User-Agent", "Astrore/0.2 (zkonikishi)")
+        .header("User-Agent", app_user_agent_with_contact())
         .send()
         .await
         .map_err(|e| format!("下载失败: {e}"))?;
@@ -1439,11 +1447,143 @@ fn get_core_types() -> Result<Vec<CoreTypeInfo>, String> {
 }
 
 #[tauri::command]
-async fn list_java_releases() -> Result<Vec<JavaRelease>, String> {
-    let url = "https://api.adoptium.net/v3/assets/feature_releases/21/ga?page_size=20&image_type=jdk&jvm_impl=hotspot&vendor=eclipse";
+async fn list_official_core_versions(core_name: String) -> Result<Vec<String>, String> {
+    let client = reqwest::Client::new();
+    let versions: Vec<String> = match core_name.as_str() {
+        "paper" | "folia" | "velocity" => {
+            let url = format!("https://api.papermc.io/v2/projects/{core_name}");
+            let data: serde_json::Value = client.get(&url).header("User-Agent", app_user_agent()).send().await.map_err(|e| format!("获取版本列表失败: {e}"))?.json().await.map_err(|e| format!("解析失败: {e}"))?;
+            data["versions"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).rev().collect()
+        }
+        "purpur" => {
+            let data: serde_json::Value = client.get("https://api.purpurmc.org/v2/purpur").header("User-Agent", app_user_agent()).send().await.map_err(|e| format!("获取版本列表失败: {e}"))?.json().await.map_err(|e| format!("解析失败: {e}"))?;
+            data["versions"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).rev().collect()
+        }
+        "vanilla" => {
+            let data: serde_json::Value = client.get("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json").header("User-Agent", app_user_agent()).send().await.map_err(|e| format!("获取版本列表失败: {e}"))?.json().await.map_err(|e| format!("解析失败: {e}"))?;
+            data["versions"].as_array().into_iter().flatten().filter_map(|v| v["id"].as_str().map(str::to_string)).collect()
+        }
+        "fabric" => {
+            let data: serde_json::Value = client.get("https://meta.fabricmc.net/v2/versions/loader").header("User-Agent", app_user_agent()).send().await.map_err(|e| format!("获取版本列表失败: {e}"))?.json().await.map_err(|e| format!("解析失败: {e}"))?;
+            let mut versions: Vec<String> = Vec::new();
+            for v in data.as_array().into_iter().flatten() {
+                if let Some(intermediary) = v["intermediary"].as_object() {
+                    if let Some(ver) = intermediary["version"].as_str() { versions.push(ver.to_string()); }
+                }
+            }
+            versions.sort_by(|a, b| b.cmp(a));
+            versions
+        }
+        _ => return Err(format!("{core_name} 暂不支持官方源")),
+    };
+    Ok(versions)
+}
+
+#[tauri::command]
+async fn list_official_core_builds(core_name: String, mc_version: String) -> Result<Vec<BuildInfo>, String> {
+    let client = reqwest::Client::new();
+    let builds: Vec<BuildInfo> = match core_name.as_str() {
+        "paper" | "folia" | "velocity" => {
+            let url = format!("https://api.papermc.io/v2/projects/{core_name}/versions/{mc_version}/builds");
+            let data: serde_json::Value = client.get(&url).header("User-Agent", app_user_agent()).send().await.map_err(|e| format!("获取构建列表失败: {e}"))?.json().await.map_err(|e| format!("解析失败: {e}"))?;
+            data["builds"].as_array().into_iter().flatten().filter_map(|b| Some(BuildInfo { core_version: b["build"].as_u64()?.to_string(), update_time: b["time"].as_str().unwrap_or("").to_string() })).collect()
+        }
+        "purpur" => {
+            let url = format!("https://api.purpurmc.org/v2/purpur/{mc_version}");
+            let data: serde_json::Value = client.get(&url).header("User-Agent", app_user_agent()).send().await.map_err(|e| format!("获取构建列表失败: {e}"))?.json().await.map_err(|e| format!("解析失败: {e}"))?;
+            data["builds"].as_object().into_iter().flatten().map(|(k, v)| BuildInfo { core_version: k.clone(), update_time: v["timestamp"].as_str().unwrap_or("").to_string() }).collect()
+        }
+        "vanilla" => {
+            let manifest_url = format!("https://piston-meta.mojang.com/v1/packages/21df1d9d0b5c28f56b7b3a1c4c0b7b5a8c9d0e1f/{mc_version}.json");
+            let data: serde_json::Value = client.get("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json").header("User-Agent", app_user_agent()).send().await.map_err(|e| format!("获取版本清单失败: {e}"))?.json().await.map_err(|e| format!("解析失败: {e}"))?;
+            let mut found = None;
+            for v in data["versions"].as_array().into_iter().flatten() {
+                if v["id"].as_str() == Some(&mc_version) {
+                    found = Some(v["url"].as_str().unwrap_or("").to_string());
+                    break;
+                }
+            }
+            if let Some(url) = found {
+                let detail: serde_json::Value = client.get(&url).header("User-Agent", app_user_agent()).send().await.map_err(|e| format!("获取版本详情失败: {e}"))?.json().await.map_err(|e| format!("解析失败: {e}"))?;
+                let server_url = detail["downloads"]["server"]["url"].as_str().unwrap_or("").to_string();
+                let sha1 = detail["downloads"]["server"]["sha1"].as_str().unwrap_or("").to_string();
+                let time = detail["releaseTime"].as_str().unwrap_or("").to_string();
+                vec![BuildInfo { core_version: sha1, update_time: time }]
+            } else {
+                Vec::new()
+            }
+        }
+        "fabric" => {
+            let url = format!("https://meta.fabricmc.net/v2/versions/loader/{mc_version}");
+            let data: serde_json::Value = client.get(&url).header("User-Agent", app_user_agent()).send().await.map_err(|e| format!("获取构建列表失败: {e}"))?.json().await.map_err(|e| format!("解析失败: {e}"))?;
+            let mut builds = Vec::new();
+            for item in data.as_array().into_iter().flatten() {
+                if let Some(loader) = item["loader"].as_object() {
+                    builds.push(BuildInfo { core_version: loader["version"].as_str().unwrap_or("").to_string(), update_time: String::new() });
+                }
+            }
+            builds
+        }
+        _ => return Err(format!("{core_name} 暂不支持官方源")),
+    };
+    Ok(builds)
+}
+
+#[tauri::command]
+async fn download_official_server_core(
+    instance_path: String,
+    core_name: String,
+    mc_version: String,
+    build: String,
+    app: AppHandle,
+) -> Result<String, String> {
+    ensure_local_management()?;
+    app.state::<AppState>().cancel_download.store(false, Ordering::SeqCst);
+    let root = safe_root(&instance_path)?;
+    let client = reqwest::Client::new();
+
+    let (download_url, file_name) = match core_name.as_str() {
+        "paper" | "folia" | "velocity" => {
+            let url = format!("https://api.papermc.io/v2/projects/{core_name}/versions/{mc_version}/builds/{build}");
+            let data: serde_json::Value = client.get(&url).header("User-Agent", app_user_agent()).send().await.map_err(|e| format!("获取下载信息失败: {e}"))?.json().await.map_err(|e| format!("解析失败: {e}"))?;
+            let dl = data["downloads"]["application"]["name"].as_str().unwrap_or("server.jar");
+            let download_url = format!("https://api.papermc.io/v2/projects/{core_name}/versions/{mc_version}/builds/{build}/downloads/{dl}");
+            (download_url, dl.to_string())
+        }
+        "purpur" => {
+            let download_url = format!("https://api.purpurmc.org/v2/purpur/{mc_version}/{build}/download");
+            (download_url, format!("purpur-{mc_version}-{build}.jar"))
+        }
+        "vanilla" => {
+            let manifest_data: serde_json::Value = client.get("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json").header("User-Agent", app_user_agent()).send().await.map_err(|e| format!("获取版本清单失败: {e}"))?.json().await.map_err(|e| format!("解析失败: {e}"))?;
+            let mut detail_url = String::new();
+            for v in manifest_data["versions"].as_array().into_iter().flatten() {
+                if v["id"].as_str() == Some(&mc_version) {
+                    detail_url = v["url"].as_str().unwrap_or("").to_string();
+                    break;
+                }
+            }
+            let detail: serde_json::Value = client.get(&detail_url).header("User-Agent", app_user_agent()).send().await.map_err(|e| format!("获取版本详情失败: {e}"))?.json().await.map_err(|e| format!("解析失败: {e}"))?;
+            let download_url = detail["downloads"]["server"]["url"].as_str().unwrap_or("").to_string();
+            (download_url, format!("minecraft_server.{mc_version}.jar"))
+        }
+        "fabric" => {
+            let loader_url = format!("https://meta.fabricmc.net/v2/versions/loader/{mc_version}/{build}/server/jar");
+            (loader_url, format!("fabric-server-{mc_version}-{build}.jar"))
+        }
+        _ => return Err(format!("{core_name} 暂不支持官方源下载")),
+    };
+
+    download_to_instance(&app, &root, &download_url, &file_name).await
+}
+
+#[tauri::command]
+async fn list_java_releases(vendor: Option<String>) -> Result<Vec<JavaRelease>, String> {
+    let vendor_code = vendor.unwrap_or_else(|| "eclipse".into());
+    let url = format!("https://api.adoptium.net/v3/assets/feature_releases/21/ga?page_size=20&image_type=jdk&jvm_impl=hotspot&vendor={vendor_code}");
     let data: serde_json::Value = reqwest::Client::new()
         .get(url)
-        .header("User-Agent", "Astrore/0.2")
+        .header("User-Agent", app_user_agent())
         .send().await.map_err(|e| format!("获取 Java 列表失败: {e}"))?
         .json().await.map_err(|e| format!("解析 Java 列表失败: {e}"))?;
     let mut releases = Vec::new();
@@ -1482,7 +1622,7 @@ async fn download_java(
     let part = target_dir.join(format!("{file_name}.part"));
     let mut response = reqwest::Client::new()
         .get(&download_url)
-        .header("User-Agent", "Astrore/0.2")
+        .header("User-Agent", app_user_agent())
         .send().await.map_err(|e| format!("下载失败: {e}"))?;
     let total = response.content_length().unwrap_or(0);
     let mut downloaded = 0u64;
@@ -1513,7 +1653,7 @@ async fn search_spiget(query: String) -> Result<Vec<SpigetResource>, String> {
     let url = format!("https://api.spiget.org/v2/search/resources/{query}?size=20&sort=-downloads&fields=id,name,tag,description,icon,downloads,rating,author,version");
     let data: serde_json::Value = reqwest::Client::new()
         .get(&url)
-        .header("User-Agent", "Astrore/0.2")
+        .header("User-Agent", app_user_agent())
         .send().await.map_err(|e| format!("搜索失败: {e}"))?
         .json().await.map_err(|e| format!("解析失败: {e}"))?;
     Ok(data.as_array().into_iter().flatten().map(|item| SpigetResource {
@@ -1548,7 +1688,7 @@ async fn download_spiget_plugin(
     let part = target_dir.join(format!("{file_name}.part"));
     let mut response = reqwest::Client::new()
         .get(&url)
-        .header("User-Agent", "Astrore/0.2")
+        .header("User-Agent", app_user_agent())
         .send().await.map_err(|e| format!("下载失败: {e}"))?;
     let total = response.content_length().unwrap_or(0);
     let mut downloaded = 0u64;
@@ -1662,11 +1802,11 @@ fn is_private_extension_host(ip: std::net::IpAddr) -> bool {
 #[tauri::command]
 async fn fetch_extension_registry(registry_url: String) -> Result<Vec<RegistryExtension>, String> {
     let url = validate_https_url(&registry_url)?;
-    let trusted_registry = registry_url == "https://raw.githubusercontent.com/zkonikishi/Astrore/main/registry/index.json";
+    let trusted_registry = registry_url == "https://zkonikishi.github.io/Astrore-docs/registry/index.json";
     let response = reqwest::Client::new()
         .get(url)
         .timeout(Duration::from_secs(20))
-        .header("User-Agent", "Astrore/0.2")
+        .header("User-Agent", app_user_agent())
         .send()
         .await
         .map_err(|error| format!("获取扩展注册表失败: {error}"))?
@@ -1720,7 +1860,7 @@ async fn install_registry_extension(
     let response = reqwest::Client::new()
         .get(url)
         .timeout(Duration::from_secs(60))
-        .header("User-Agent", "Astrore/0.2")
+        .header("User-Agent", app_user_agent())
         .send()
         .await
         .map_err(|error| format!("下载扩展失败: {error}"))?
@@ -1951,6 +2091,9 @@ pub fn run() {
             list_server_cores,
             list_core_builds,
             download_server_core,
+            list_official_core_versions,
+            list_official_core_builds,
+            download_official_server_core,
             get_metrics,
             get_auto_restart_config,
             set_auto_restart_config,
