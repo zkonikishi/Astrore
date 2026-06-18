@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   Activity,
@@ -58,7 +58,7 @@ import {
 } from "./bridge";
 import { highlightLine } from "./consoleHighlighter";
 
-type Tab = "overview" | "control" | "instance" | "files" | "software" | "download" | "extensions" | "about";
+type Tab = "overview" | "control" | "instance" | "files" | "permissions" | "software" | "download" | "extensions" | "about";
 type InstanceTab = "runtime" | "properties" | "rules" | "optimization";
 type FilesTab = "plugins" | "mods" | "backups";
 type SoftwareTab = "basic" | "ai";
@@ -289,6 +289,7 @@ function App() {
         control: "控制面板",
         instance: "实例配置",
         files: "文件管理",
+        permissions: "玩家权限",
         software: "软件设置",
         download: "下载中心",
         extensions: "扩展商店",
@@ -419,7 +420,8 @@ function App() {
       [["控制台", "命令", "console", "面板"], "control"], [["下载", "核心", "market", "java"], "download"],
       [["文件", "备份", "backup", "插件", "模组", "mod", "plugin"], "files"],
       [["AI", "助手", "诊断", "报错分析", "厂商"], "software"],
-      [["配置", "properties", "玩家", "权限", "白名单", "op", "实例"], "instance"],
+      [["玩家", "权限", "白名单", "op"], "permissions"],
+      [["配置", "properties", "实例"], "instance"],
       [["商店", "扩展"], "extensions"], [["关于", "readme"], "about"],
     ];
     const result = routes.find(([keywords]) => keywords.some(keyword => query.includes(keyword)));
@@ -470,6 +472,7 @@ function App() {
           <NavButton icon={<TerminalSquare />} label="控制面板" active={tab === "control"} onClick={() => setTab("control")} />
           <NavButton icon={<Server />} label="实例配置" active={tab === "instance"} onClick={() => setTab("instance")} />
           <NavButton icon={<Folder />} label="文件管理" active={tab === "files"} onClick={() => setTab("files")} />
+          <NavButton icon={<Users />} label="玩家权限" active={tab === "permissions"} onClick={() => setTab("permissions")} />
           <NavButton icon={<Settings />} label="软件设置" active={tab === "software"} onClick={() => setTab("software")} />
           <NavButton icon={<Download />} label="下载中心" active={tab === "download"} onClick={() => setTab("download")} />
           <NavButton icon={<Puzzle />} label="扩展商店" active={tab === "extensions"} onClick={() => setTab("extensions")} />
@@ -591,6 +594,7 @@ function App() {
           {tab === "control" && <ControlPanel lines={consoleLines} command={command} setCommand={setCommand} sendCommand={sendCommand} running={running} start={start} stop={stop} forceStop={forceStop} metrics={sysMetrics} instance={instanceConfig} onError={setError} />}
           {tab === "download" && <DownloadTab subTab={downloadTab} setSubTab={setDownloadTab} instancePath={instanceConfig.instancePath} onError={setError} />}
           {tab === "files" && <FilesHub subTab={filesTab} setSubTab={setFilesTab} instancePath={instanceConfig.instancePath} onError={setError} />}
+          {tab === "permissions" && <PermissionsView instancePath={instanceConfig.instancePath} onError={setError} />}
           {tab === "extensions" && <ExtensionStoreView onError={setError} />}
           {tab === "instance" && <InstanceConfigView subTab={instanceTab} setSubTab={setInstanceTab} mode={mode} config={instanceConfig} onChange={setInstanceConfig} onSave={saveInstance} instancePath={instanceConfig.instancePath} onError={setError} autoRestart={autoRestart} onAutoRestartChange={(c) => { setAutoRestart(c); localStorage.setItem("astrore.autoRestart", JSON.stringify(c)); setAutoRestartConfig(c).catch(reason => setError(String(reason))); }} />}
           {tab === "about" && <AboutView />}
@@ -782,7 +786,6 @@ function RulesSettingsView({ instancePath, onError }: { instancePath: string; on
       <label>服务器 MOTD<input value={properties.motd ?? ""} onChange={event => update("motd", event.target.value)} placeholder="A Minecraft Server" /></label>
       <div className="form-actions"><button className="secondary" disabled={!instancePath || saving} onClick={load}>重新读取</button><button className="primary" disabled={!instancePath || saving} onClick={save}>{saving ? "保存中..." : "保存规则"}</button></div>
     </div>
-    <PermissionsView instancePath={instancePath} onError={onError} />
   </section>;
 }
 
@@ -847,7 +850,15 @@ function SoftwareSettingsView({ subTab, setSubTab, autoRestart, onAutoRestartCha
   const [aiEndpoint, setAiEndpoint] = useState(() => localStorage.getItem("astrore.ai.endpoint") ?? "https://api.openai.com/v1/chat/completions");
   const [aiModel, setAiModel] = useState(() => localStorage.getItem("astrore.ai.model") ?? "");
   const [aiKey, setAiKey] = useState(() => localStorage.getItem("astrore.ai.apiKey") ?? "");
+  const [providerQuery, setProviderQuery] = useState("");
   const selectedAiProvider = findProviderById(aiProvider);
+  const filteredProviders = useMemo(() => {
+    const query = providerQuery.trim().toLowerCase();
+    if (!query) return PROVIDERS;
+    return PROVIDERS.filter(provider =>
+      [provider.name, provider.tag, provider.id, ...provider.models].some(value => value.toLowerCase().includes(query)),
+    );
+  }, [providerQuery]);
   const saveAgent = () => {
     if (agentUrl.trim()) localStorage.setItem("astrore.agentUrl", agentUrl.trim().replace(/\/+$/, ""));
     else localStorage.removeItem("astrore.agentUrl");
@@ -888,7 +899,27 @@ function SoftwareSettingsView({ subTab, setSubTab, autoRestart, onAutoRestartCha
     </div>}
     {subTab === "ai" && <div className="panel agent-settings">
       <PanelHeader icon={<Bot />} title="AI 助手设置" action="Provider" />
-      <label>AI 厂商<select value={aiProvider} onChange={event => changeAiProvider(event.target.value)}>{PROVIDERS.map(provider => <option key={provider.id} value={provider.id}>{provider.name} · {provider.tag}</option>)}</select></label>
+      <div className="ai-provider-search">
+        <Search size={14} />
+        <input value={providerQuery} onChange={event => setProviderQuery(event.target.value)} placeholder="搜索厂商、标签或模型" />
+      </div>
+      <div className="ai-provider-grid" role="list" aria-label="AI 厂商">
+        {filteredProviders.map(provider => (
+          <button type="button" key={provider.id} className={aiProvider === provider.id ? "ai-provider-card selected" : "ai-provider-card"} onClick={() => changeAiProvider(provider.id)}>
+            <span className="ai-provider-icon">{provider.icon}</span>
+            <span className="ai-provider-name">{provider.name}</span>
+            <span className="ai-provider-tag">{provider.tag}</span>
+            {aiProvider === provider.id && <span className="ai-provider-check">✓</span>}
+          </button>
+        ))}
+      </div>
+      {selectedAiProvider && <div className="ai-provider-detail">
+        <span className="ai-provider-detail-icon">{selectedAiProvider.icon}</span>
+        <div>
+          <strong>{selectedAiProvider.name} · {selectedAiProvider.tag}</strong>
+          <small>{selectedAiProvider.endpoint}</small>
+        </div>
+      </div>}
       <label>兼容接口地址<input value={aiEndpoint} onChange={event => setAiEndpoint(event.target.value)} placeholder="例如 https://api.openai.com/v1/chat/completions" /></label>
       <label>模型名称{selectedAiProvider && selectedAiProvider.models.length > 0 && <select value={aiModel} onChange={event => setAiModel(event.target.value)}>{selectedAiProvider.models.map(model => <option key={model} value={model}>{model}</option>)}</select>}<input value={aiModel} onChange={event => setAiModel(event.target.value)} placeholder="例如 gpt-4.1-mini / deepseek-chat" /></label>
       <label>API Key<input type="password" value={aiKey} onChange={event => setAiKey(event.target.value)} placeholder={selectedAiProvider?.apiKeyHint ?? "保存在本机 localStorage"} /></label>
