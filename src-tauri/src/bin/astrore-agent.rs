@@ -713,6 +713,106 @@ async fn invoke(command: &str, args: Value, state: &AgentState) -> Result<Value,
             fs::write(root.join(&name), bytes).map_err(|error| error.to_string())?;
             Ok(json!(name))
         }
+        "list_official_core_versions" => {
+            let core = args.get("coreName").and_then(Value::as_str).ok_or("missing coreName")?;
+            let client = reqwest::Client::new();
+            let versions: Vec<Value> = match core {
+                "paper" | "folia" | "velocity" => {
+                    let data: Value = client.get(format!("https://api.papermc.io/v2/projects/{core}"))
+                        .header("User-Agent", agent_user_agent()).send().await.map_err(|error| error.to_string())?
+                        .error_for_status().map_err(|error| error.to_string())?.json().await.map_err(|error| error.to_string())?;
+                    data["versions"].as_array().into_iter().flatten().cloned().collect()
+                }
+                "purpur" => {
+                    let data: Value = client.get("https://api.purpurmc.org/v2/purpur")
+                        .header("User-Agent", agent_user_agent()).send().await.map_err(|error| error.to_string())?
+                        .error_for_status().map_err(|error| error.to_string())?.json().await.map_err(|error| error.to_string())?;
+                    data["versions"].as_array().into_iter().flatten().cloned().collect()
+                }
+                "vanilla" => {
+                    let data: Value = client.get("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
+                        .header("User-Agent", agent_user_agent()).send().await.map_err(|error| error.to_string())?
+                        .error_for_status().map_err(|error| error.to_string())?.json().await.map_err(|error| error.to_string())?;
+                    data["versions"].as_array().into_iter().flatten().filter_map(|item| item["id"].as_str().map(|id| json!(id))).collect()
+                }
+                "fabric" => {
+                    let data: Value = client.get("https://meta.fabricmc.net/v2/versions/game")
+                        .header("User-Agent", agent_user_agent()).send().await.map_err(|error| error.to_string())?
+                        .error_for_status().map_err(|error| error.to_string())?.json().await.map_err(|error| error.to_string())?;
+                    data.as_array().into_iter().flatten().filter_map(|item| item["version"].as_str().map(|id| json!(id))).collect()
+                }
+                _ => Vec::new(),
+            };
+            Ok(Value::Array(versions))
+        }
+        "list_official_core_builds" => {
+            let core = args.get("coreName").and_then(Value::as_str).ok_or("missing coreName")?;
+            let version = args.get("mcVersion").and_then(Value::as_str).ok_or("missing mcVersion")?;
+            let client = reqwest::Client::new();
+            let builds: Vec<Value> = match core {
+                "paper" | "folia" | "velocity" => {
+                    let data: Value = client.get(format!("https://api.papermc.io/v2/projects/{core}/versions/{version}"))
+                        .header("User-Agent", agent_user_agent()).send().await.map_err(|error| error.to_string())?
+                        .error_for_status().map_err(|error| error.to_string())?.json().await.map_err(|error| error.to_string())?;
+                    data["builds"].as_array().into_iter().flatten().filter_map(|build| build.as_u64().map(|n| json!({ "coreVersion": n.to_string(), "updateTime": "" }))).collect()
+                }
+                "purpur" => {
+                    let data: Value = client.get(format!("https://api.purpurmc.org/v2/purpur/{version}"))
+                        .header("User-Agent", agent_user_agent()).send().await.map_err(|error| error.to_string())?
+                        .error_for_status().map_err(|error| error.to_string())?.json().await.map_err(|error| error.to_string())?;
+                    data["builds"].as_object().into_iter().flatten().map(|(key, value)| json!({ "coreVersion": key, "updateTime": value["timestamp"] })).collect()
+                }
+                "vanilla" => {
+                    let data: Value = client.get("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
+                        .header("User-Agent", agent_user_agent()).send().await.map_err(|error| error.to_string())?
+                        .error_for_status().map_err(|error| error.to_string())?.json().await.map_err(|error| error.to_string())?;
+                    data["versions"].as_array().into_iter().flatten().find(|item| item["id"].as_str() == Some(version))
+                        .map(|item| vec![json!({ "coreVersion": item["id"], "updateTime": item["releaseTime"] })]).unwrap_or_default()
+                }
+                "fabric" => {
+                    let data: Value = client.get(format!("https://meta.fabricmc.net/v2/versions/loader/{version}"))
+                        .header("User-Agent", agent_user_agent()).send().await.map_err(|error| error.to_string())?
+                        .error_for_status().map_err(|error| error.to_string())?.json().await.map_err(|error| error.to_string())?;
+                    data.as_array().into_iter().flatten().filter_map(|item| item["loader"]["version"].as_str().map(|loader| json!({ "coreVersion": loader, "updateTime": "" }))).collect()
+                }
+                _ => Vec::new(),
+            };
+            Ok(Value::Array(builds))
+        }
+        "download_official_server_core" => {
+            let root = root(&args)?;
+            let core = args.get("coreName").and_then(Value::as_str).ok_or("missing coreName")?;
+            let version = args.get("mcVersion").and_then(Value::as_str).ok_or("missing mcVersion")?;
+            let build = args.get("build").and_then(Value::as_str).ok_or("missing build")?;
+            let client = reqwest::Client::new();
+            let (url, name) = match core {
+                "paper" | "folia" | "velocity" => {
+                    let data: Value = client.get(format!("https://api.papermc.io/v2/projects/{core}/versions/{version}/builds/{build}"))
+                        .header("User-Agent", agent_user_agent()).send().await.map_err(|error| error.to_string())?
+                        .error_for_status().map_err(|error| error.to_string())?.json().await.map_err(|error| error.to_string())?;
+                    let name = data["downloads"]["application"]["name"].as_str().unwrap_or("server.jar").to_string();
+                    (format!("https://api.papermc.io/v2/projects/{core}/versions/{version}/builds/{build}/downloads/{name}"), name)
+                }
+                "purpur" => (format!("https://api.purpurmc.org/v2/purpur/{version}/{build}/download"), format!("purpur-{version}-{build}.jar")),
+                "vanilla" => {
+                    let manifest: Value = client.get("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
+                        .header("User-Agent", agent_user_agent()).send().await.map_err(|error| error.to_string())?
+                        .error_for_status().map_err(|error| error.to_string())?.json().await.map_err(|error| error.to_string())?;
+                    let detail_url = manifest["versions"].as_array().into_iter().flatten().find(|item| item["id"].as_str() == Some(version))
+                        .and_then(|item| item["url"].as_str()).ok_or("vanilla version not found")?;
+                    let detail: Value = client.get(detail_url).header("User-Agent", agent_user_agent()).send().await.map_err(|error| error.to_string())?
+                        .error_for_status().map_err(|error| error.to_string())?.json().await.map_err(|error| error.to_string())?;
+                    (detail["downloads"]["server"]["url"].as_str().ok_or("server download not found")?.to_string(), format!("minecraft_server.{version}.jar"))
+                }
+                "fabric" => (format!("https://meta.fabricmc.net/v2/versions/loader/{version}/{build}/server/jar"), format!("fabric-server-{version}-{build}.jar")),
+                _ => return Err("unsupported official core".into()),
+            };
+            if name.is_empty() || name.contains(['/', '\\']) { return Err("invalid file name".into()); }
+            let bytes = client.get(url).header("User-Agent", agent_user_agent()).send().await.map_err(|error| error.to_string())?
+                .error_for_status().map_err(|error| error.to_string())?.bytes().await.map_err(|error| error.to_string())?;
+            fs::write(root.join(&name), bytes).map_err(|error| error.to_string())?;
+            Ok(json!(name))
+        }
         "search_modrinth" => {
             let query = args.get("query").and_then(Value::as_str).ok_or("缺少搜索关键词")?;
             let kind = args.get("kind").and_then(Value::as_str).unwrap_or("plugins");
@@ -738,6 +838,50 @@ async fn invoke(command: &str, args: Value, state: &AgentState) -> Result<Value,
                     "fileName": file["filename"], "gameVersions": item["game_versions"], "loaders": item["loaders"] }))
             }).collect()))
         }
+        "search_curseforge" => {
+            let query = args.get("query").and_then(Value::as_str).unwrap_or("popular");
+            let kind = args.get("kind").and_then(Value::as_str).unwrap_or("plugins");
+            let api_key = args.get("apiKey").and_then(Value::as_str).ok_or("CurseForge 需要 API Key")?;
+            let class_id = if kind == "mods" { "6" } else { "4471" };
+            let data: Value = reqwest::Client::new()
+                .get("https://api.curseforge.com/v1/mods/search")
+                .query(&[("gameId", "432"), ("classId", class_id), ("searchFilter", query), ("pageSize", "20")])
+                .header("x-api-key", api_key)
+                .header("User-Agent", agent_user_agent())
+                .send().await.map_err(|error| format!("CurseForge 搜索失败: {error}"))?
+                .error_for_status().map_err(|error| format!("CurseForge 请求失败: {error}"))?
+                .json().await.map_err(|error| format!("解析失败: {error}"))?;
+            Ok(Value::Array(data["data"].as_array().into_iter().flatten().map(|item| json!({
+                "name": item["slug"], "title": item["name"], "description": item["summary"],
+                "iconUrl": item["logo"]["url"], "downloads": item["downloadCount"],
+                "categories": item["categories"].as_array().into_iter().flatten().filter_map(|v| v["name"].as_str().map(str::to_string)).collect::<Vec<_>>(),
+                "projectId": item["id"].as_u64().unwrap_or(0).to_string()
+            })).collect()))
+        }
+        "get_curseforge_files" => {
+            let mod_id = args.get("modId").and_then(Value::as_str).ok_or("缺少 Mod ID")?;
+            let api_key = args.get("apiKey").and_then(Value::as_str).ok_or("CurseForge 需要 API Key")?;
+            let data: Value = reqwest::Client::new()
+                .get(format!("https://api.curseforge.com/v1/mods/{mod_id}/files"))
+                .query(&[("pageSize", "20")])
+                .header("x-api-key", api_key)
+                .header("User-Agent", agent_user_agent())
+                .send().await.map_err(|error| format!("CurseForge 获取文件失败: {error}"))?
+                .error_for_status().map_err(|error| format!("CurseForge 请求失败: {error}"))?
+                .json().await.map_err(|error| format!("解析失败: {error}"))?;
+            Ok(Value::Array(data["data"].as_array().into_iter().flatten().filter_map(|item| {
+                let file_name = item["fileName"].as_str().unwrap_or_default().to_string();
+                if file_name.is_empty() { return None; }
+                Some(json!({
+                    "name": item["displayName"].as_str().unwrap_or(&file_name),
+                    "versionNumber": item["displayName"].as_str().unwrap_or_default(),
+                    "downloadUrl": item["downloadUrl"].as_str().unwrap_or_default(),
+                    "fileName": file_name,
+                    "gameVersions": item["gameVersions"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect::<Vec<_>>(),
+                    "loaders": []
+                }))
+            }).collect()))
+        }
         "download_plugin" => {
             let root = root(&args)?;
             let kind = args.get("kind").and_then(Value::as_str).ok_or("缺少下载类型")?;
@@ -746,7 +890,7 @@ async fn invoke(command: &str, args: Value, state: &AgentState) -> Result<Value,
             if name.is_empty() || name.contains(['/', '\\']) { return Err("无效的文件名".into()); }
             let url = reqwest::Url::parse(args.get("downloadUrl").and_then(Value::as_str).ok_or("缺少下载地址")?).map_err(|error| error.to_string())?;
             let host = url.host_str().ok_or("下载地址缺少主机名")?;
-            if url.scheme() != "https" || !(host == "modrinth.com" || host.ends_with(".modrinth.com")) { return Err("只允许从 Modrinth HTTPS 地址下载".into()); }
+            if url.scheme() != "https" || !(host == "modrinth.com" || host.ends_with(".modrinth.com") || host == "forgecdn.net" || host.ends_with(".forgecdn.net") || host == "edge.forgecdn.net" || host.ends_with(".curseforge.com")) { return Err("只允许从 Modrinth / CurseForge HTTPS 地址下载".into()); }
             let bytes = reqwest::Client::new().get(url).header("User-Agent", agent_user_agent()).send().await.map_err(|error| error.to_string())?
                 .error_for_status().map_err(|error| error.to_string())?.bytes().await.map_err(|error| error.to_string())?;
             let directory = root.join(kind);

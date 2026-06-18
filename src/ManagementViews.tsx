@@ -33,6 +33,8 @@ import {
   scanExtensions,
   searchSpiget,
   searchModrinth,
+  searchCurseForge,
+  getCurseForgeFiles,
   searchSpigetAsPlugin,
   startExtension,
   stopExtension,
@@ -529,89 +531,6 @@ export function JavaDownloadView({ onError }: { onError: (msg: string) => void }
   </section>;
 }
 
-export function SpigetPluginView({ instancePath, onError }: CommonProps) {
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<SpigetResource[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [selected, setSelected] = useState<SpigetResource | null>(null);
-  const [progress, setProgress] = useState<DownloadProgress | null>(null);
-
-  const search = async () => {
-    setSearching(true);
-    try {
-      setResults(await searchSpiget(query.trim() || "popular"));
-      setSelected(null);
-    } catch (e) { onError(String(e)); }
-    setSearching(false);
-  };
-
-  useEffect(() => { search(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (!isTauriRuntime()) return;
-    const pending = listen<DownloadProgress>("download-progress", event => setProgress(event.payload));
-    return () => { pending.then(unlisten => unlisten()); };
-  }, []);
-
-  const download = async (resource: SpigetResource) => {
-    if (!instancePath) return onError("请先配置实例目录");
-    const fileName = `${resource.name}-${resource.version}.jar`;
-    setProgress({ fileName, downloaded: 0, total: 0, percent: 0, status: "starting" });
-    try {
-      await downloadSpigetPlugin(instancePath, resource.id, fileName);
-    } catch (e) { onError(String(e)); setProgress(null); }
-  };
-
-  return <section className="panel manager-panel">
-    <div className="manager-toolbar">
-      <strong>Spiget 插件</strong>
-      <div className="search" style={{ width: 220, marginLeft: 8 }}>
-        <Search size={14} />
-        <input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && search()} placeholder="搜索 Spigot 插件..." />
-      </div>
-      <button className="primary" onClick={search} disabled={searching}>{searching ? "搜索中..." : "搜索"}</button>
-      <span style={{ marginLeft: "auto" }}>{results.length} 个结果</span>
-    </div>
-    {!instancePath ? <Empty text="请先配置实例目录" /> : selected ? (
-      <div>
-        <div className="manager-toolbar">
-          <button className="icon-btn" onClick={() => setSelected(null)}><ArrowLeft /></button>
-          <strong>{selected.name}</strong>
-          <span>v{selected.version}</span>
-        </div>
-        <div className="detail-panel">
-          {selected.iconUrl && <img src={selected.iconUrl} alt="" style={{ width: 64, height: 64, borderRadius: 8 }} />}
-          <div>
-            <h3>{selected.name}</h3>
-            <p>{selected.description}</p>
-            <div className="detail-meta">
-              <span><Star size={14} /> {selected.rating.toFixed(1)}</span>
-              <span><Download size={14} /> {sizeLabel(selected.downloads)}</span>
-              <span>作者: {selected.author}</span>
-              <span>标签: {selected.tag}</span>
-            </div>
-            <button className="primary" onClick={() => download(selected)} disabled={progress?.status === "downloading"}>下载到实例目录</button>
-          </div>
-        </div>
-        {progress && <div className="progress-view" style={{ minHeight: 60, padding: 14 }}><strong>{progress.fileName}</strong><div className="progress-track"><i style={{ width: `${progress.percent}%` }} /></div><span>{progress.status === "completed" ? "下载完成" : `${progress.percent.toFixed(1)}%`}</span></div>}
-      </div>
-    ) : (
-      <div className="plugin-list-real">
-        {results.map(item => (
-          <div key={item.id} onClick={() => setSelected(item)} style={{ cursor: "pointer" }}>
-            <div className="plugin-state enabled" style={{ background: item.iconUrl ? "transparent" : undefined }}>
-              {item.iconUrl ? <img src={item.iconUrl} alt="" style={{ width: 34, height: 34, borderRadius: 6 }} /> : <Download />}
-            </div>
-            <div><strong>{item.name}</strong><span>{item.description.slice(0, 80)}{item.description.length > 80 ? "..." : ""} · {sizeLabel(item.downloads)} 下载 · v{item.version}</span></div>
-            <span style={{ color: "#859188", fontSize: 9 }}>{item.author}</span>
-          </div>
-        ))}
-        {results.length === 0 && <Empty text={query ? "未找到结果" : "输入关键词搜索 Spigot 插件"} />}
-      </div>
-    )}
-  </section>;
-}
-
 export function CoreTypeView({ instancePath, onError }: CommonProps) {
   const [coreTypes, setCoreTypes] = useState<CoreTypeInfo[]>([]);
   const [coreName, setCoreName] = useState("");
@@ -624,22 +543,30 @@ export function CoreTypeView({ instancePath, onError }: CommonProps) {
   const [source, setSource] = useState<"fastmirror" | "official">("fastmirror");
 
   const loadTypes = useCallback(() => {
-    getCoreTypes().then(items => { setCoreTypes(items); if (items[0]) setCoreName(items[0].name); }).catch(e => onError(String(e)));
-  }, [onError]);
+    getCoreTypes().then(items => { setCoreTypes(items); if (!coreName && items[0]) setCoreName(items[0].name); }).catch(e => onError(String(e)));
+  }, [onError]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { loadTypes(); }, [loadTypes]);
 
   useEffect(() => {
     if (!coreName) return;
-    listServerCores().then(cores => {
-      const core = cores.find(c => c.name === coreName);
-      if (core) {
-        setVersions(core.mcVersions);
-        if (core.mcVersions[0]) setVersion(core.mcVersions[0]);
-      }
-    }).catch(e => onError(String(e)));
-  }, [coreName, onError]);
+    if (source === "fastmirror") {
+      listServerCores().then(cores => {
+        const core = cores.find(c => c.name.toLowerCase() === coreName.toLowerCase());
+        if (core) { setVersions(core.mcVersions); if (core.mcVersions[0]) setVersion(core.mcVersions[0]); }
+      }).catch(e => onError(String(e)));
+    } else {
+      listOfficialCoreVersions(coreName).then(vers => { setVersions(vers); if (vers[0]) setVersion(vers[0]); }).catch(e => onError(String(e)));
+    }
+  }, [coreName, source, onError]);
 
-  useEffect(() => { if (coreName && version) listCoreBuilds(coreName, version).then(items => { setBuilds(items); setBuild(items[0]?.coreVersion ?? ""); }).catch(e => onError(String(e))); }, [coreName, version, onError]);
+  useEffect(() => {
+    if (!coreName || !version) return;
+    setBuilds([]); setBuild("");
+    const fetcher = source === "fastmirror"
+      ? listCoreBuilds(coreName, version)
+      : listOfficialCoreBuilds(coreName, version);
+    fetcher.then(items => { setBuilds(items); setBuild(items[0]?.coreVersion ?? ""); }).catch(e => onError(String(e)));
+  }, [coreName, version, source, onError]);
   useEffect(() => {
     if (!isTauriRuntime()) return;
     const pending = listen<DownloadProgress>("download-progress", event => setProgress(event.payload));
@@ -657,8 +584,10 @@ export function CoreTypeView({ instancePath, onError }: CommonProps) {
     const targetBuild = useLatest ? builds[0]?.coreVersion : build;
     if (!targetBuild) return onError("请选择构建版本");
     setProgress({ fileName: "", downloaded: 0, total: 0, percent: 0, status: "starting" });
-    downloadServerCore(instancePath, coreName, version, targetBuild)
-      .then(fileName => setProgress(current => ({ fileName: fileName || current?.fileName || "", downloaded: current?.downloaded ?? 0, total: current?.total ?? 0, percent: 100, status: "completed" })))
+    const dl = source === "fastmirror"
+      ? downloadServerCore(instancePath, coreName, version, targetBuild)
+      : downloadOfficialServerCore(instancePath, coreName, version, targetBuild);
+    dl.then(fileName => setProgress(current => ({ fileName: fileName || current?.fileName || "", downloaded: current?.downloaded ?? 0, total: current?.total ?? 0, percent: 100, status: "completed" })))
       .catch(e => { onError(String(e)); setProgress(null); });
   };
 
@@ -666,25 +595,26 @@ export function CoreTypeView({ instancePath, onError }: CommonProps) {
     <div className="panel download-form">
       <div className="manager-toolbar"><Download /><strong>服务端核心下载</strong><button className="icon-btn" onClick={loadTypes}><RefreshCw /></button></div>
       <div className="segmented" style={{ margin: "10px 15px 0" }}>
-        {["all", "pure", "mod", "vanilla", "proxy"].map(cat => (
+        {["all", "pure", "mod", "vanilla", "proxy", "bedrock"].map(cat => (
           <button key={cat} className={category === cat ? "active" : ""} onClick={() => setCategory(cat)}>
-            {{all: "全部", pure: "纯净", mod: "模组", vanilla: "原版", proxy: "代理"}[cat]}
+            {{all: "全部", pure: "纯净", mod: "模组", vanilla: "原版", proxy: "代理", bedrock: "基岩"}[cat]}
           </button>
         ))}
       </div>
+      <label>下载源<select value={source} onChange={e => { setSource(e.target.value as "fastmirror" | "official"); setVersion(""); setBuilds([]); }}><option value="fastmirror">FastMirror（镜像加速）</option><option value="official">官方源（Paper/Purpur/Vanilla/Fabric）</option></select></label>
       <label>核心类型<select value={coreName} onChange={e => setCoreName(e.target.value)}>{filtered.map(c => <option key={c.name} value={c.name}>{c.label}</option>)}</select></label>
       <label>Minecraft 版本<select value={version} onChange={e => setVersion(e.target.value)}>{versions.map((v: string) => <option key={v}>{v}</option>)}</select></label>
       <label>构建版本<select value={build} onChange={e => setBuild(e.target.value)}>{builds.map(item => <option key={item.coreVersion} value={item.coreVersion}>{item.coreVersion} · {item.updateTime.slice(0, 10)}</option>)}</select></label>
       {coreName && version && builds.length === 0 && (
         <div className="download-source-hint">
-          <strong>FastMirror</strong>
-          <span>当前环境没有可用的本地 Agent，已保留核心与版本选择，可打开下载源手动下载。桌面端会通过后端直接下载到实例目录。</span>
+          <strong>{source === "fastmirror" ? "FastMirror" : "官方源"}</strong>
+          <span>{source === "fastmirror" ? "当前环境没有可用的本地 Agent，已保留核心与版本选择，可打开下载源手动下载。" : "正在从官方 API 获取构建列表..."}</span>
         </div>
       )}
       <div className="download-buttons">
         <button className="primary" disabled={!build || progress?.status === "downloading"} onClick={() => download(false)}><Download />下载选中构建</button>
         <button className="secondary" disabled={!builds[0] || progress?.status === "downloading"} onClick={() => download(true)}>下载最新构建</button>
-        <button className="secondary" onClick={openFastMirror} disabled={!coreName || !version}><ExternalLink size={14} />FastMirror</button>
+        {source === "fastmirror" && <button className="secondary" onClick={openFastMirror} disabled={!coreName || !version}><ExternalLink size={14} />FastMirror</button>}
       </div>
     </div>
     <div className="panel download-status">
@@ -698,7 +628,7 @@ function Empty({ text }: { text: string }) { return <div className="empty-state"
 
 export function PluginMarketView({ instancePath, onError, kind: fixedKind }: CommonProps & { kind?: "plugins" | "mods" }) {
   const [kind, setKind] = useState<"plugins" | "mods">(fixedKind ?? "plugins");
-  const [source, setSource] = useState<"modrinth" | "spiget">("modrinth");
+  const [source, setSource] = useState<"modrinth" | "curseforge">("modrinth");
   const [query, setQuery] = useState("");
   const [gameVersion, setGameVersion] = useState("");
   const [loader, setLoader] = useState("");
@@ -709,6 +639,7 @@ export function PluginMarketView({ instancePath, onError, kind: fixedKind }: Com
   const [versions, setVersions] = useState<PluginVersion[]>([]);
   const [progress, setProgress] = useState<DownloadProgress | null>(null);
   const [popular, setPopular] = useState<PluginInfo[]>([]);
+  const [cfApiKey, setCfApiKey] = useState(() => localStorage.getItem("astrore.curseforge.apiKey") ?? "");
 
   const search = async () => {
     setSearching(true);
@@ -716,6 +647,9 @@ export function PluginMarketView({ instancePath, onError, kind: fixedKind }: Com
       if (source === "modrinth") {
         const terms = [query.trim() || "popular", gameVersion, loader, sort !== "relevance" ? sort : ""].filter(Boolean).join(" ");
         setResults(await searchModrinth(terms, kind));
+      } else if (source === "curseforge") {
+        if (!cfApiKey.trim()) { onError("CurseForge 需要 API Key，请在下方设置"); setSearching(false); return; }
+        setResults(await searchCurseForge(query.trim() || "popular", kind, cfApiKey.trim()));
       } else {
         setResults(await searchSpigetAsPlugin(query.trim() || "popular"));
       }
@@ -731,7 +665,9 @@ export function PluginMarketView({ instancePath, onError, kind: fixedKind }: Com
     if (popular.length === 0) {
       const loadPopular = source === "modrinth"
         ? searchModrinth("popular", kind)
-        : searchSpigetAsPlugin("popular");
+        : source === "curseforge"
+          ? (cfApiKey.trim() ? searchCurseForge("popular", kind, cfApiKey.trim()) : Promise.resolve([]))
+          : searchSpigetAsPlugin("popular");
       loadPopular.then(items => setPopular(items.slice(0, 8))).catch(() => {});
     }
   }, [kind, source]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -740,6 +676,8 @@ export function PluginMarketView({ instancePath, onError, kind: fixedKind }: Com
     setSelected(project);
     if (source === "modrinth") {
       try { setVersions(await getModrinthVersions(project.projectId)); } catch (e) { onError(String(e)); }
+    } else if (source === "curseforge") {
+      try { setVersions(await getCurseForgeFiles(project.projectId, cfApiKey.trim())); } catch (e) { onError(String(e)); }
     }
   };
 
@@ -764,12 +702,13 @@ export function PluginMarketView({ instancePath, onError, kind: fixedKind }: Com
     <div className="manager-toolbar">
       {!fixedKind && <div className="segmented">
         <button className={kind === "plugins" ? "active" : ""} onClick={() => { setKind("plugins"); setResults([]); setSelected(null); setPopular([]); }}>插件</button>
-        <button className={kind === "mods" ? "active" : ""} onClick={() => { setKind("mods"); setResults([]); setSelected(null); setPopular([]); }}>模组</button>
+        <button className={kind === "mods" ? "active" : ""} onClick={() => { setKind("mods"); setSource("modrinth"); setResults([]); setSelected(null); setPopular([]); }}>模组</button>
       </div>}
       {fixedKind && <strong>{fixedKind === "plugins" ? "插件下载" : "模组下载"}</strong>}
       <div className="segmented" style={{ marginLeft: 8 }}>
         <button className={source === "modrinth" ? "active" : ""} onClick={() => { setSource("modrinth"); setResults([]); setSelected(null); setPopular([]); }}>Modrinth</button>
-        <button className={source === "spiget" ? "active" : ""} onClick={() => { setSource("spiget"); setResults([]); setSelected(null); setPopular([]); }}>Spiget</button>
+        <button className={source === "curseforge" ? "active" : ""} onClick={() => { setSource("curseforge"); setResults([]); setSelected(null); setPopular([]); }}>CurseForge</button>
+        {kind === "plugins" && <button className={source === "spiget" ? "active" : ""} onClick={() => { setSource("spiget"); setResults([]); setSelected(null); setPopular([]); }}>Spiget</button>}
       </div>
       <div className="search" style={{ width: 200, marginLeft: 8 }}>
         <Search size={14} />
@@ -782,6 +721,9 @@ export function PluginMarketView({ instancePath, onError, kind: fixedKind }: Com
       <label>Minecraft 版本<input value={gameVersion} onChange={event => setGameVersion(event.target.value)} onKeyDown={event => event.key === "Enter" && search()} placeholder="例如 1.21.8" /></label>
       <label>加载器<select value={loader} onChange={event => setLoader(event.target.value)}><option value="">全部</option><option value="paper">Paper</option><option value="spigot">Spigot</option><option value="fabric">Fabric</option><option value="forge">Forge</option><option value="neoforge">NeoForge</option></select></label>
       <label>排序<select value={sort} onChange={event => setSort(event.target.value)}><option value="relevance">相关度</option><option value="downloads">下载量</option><option value="updated">最近更新</option><option value="follows">收藏数</option></select></label>
+    </div>}
+    {source === "curseforge" && <div className="download-filter-row">
+      <label>CurseForge API Key<input type="password" value={cfApiKey} onChange={event => { setCfApiKey(event.target.value); localStorage.setItem("astrore.curseforge.apiKey", event.target.value); }} placeholder="申请地址: https://console.curseforge.com" /></label>
     </div>}
     {!instancePath ? <Empty text="请先配置实例目录" /> : selected ? (
       <div>
@@ -801,7 +743,7 @@ export function PluginMarketView({ instancePath, onError, kind: fixedKind }: Com
             </div>
           </div>
         </div>
-        {source === "modrinth" ? (
+        {source !== "spiget" ? (
           <div className="plugin-list-real">
             {versions.map(v => (
               <div key={v.versionNumber}>
@@ -812,7 +754,7 @@ export function PluginMarketView({ instancePath, onError, kind: fixedKind }: Com
             ))}
           </div>
         ) : (
-          <div style={{ padding: 14 }}><Empty text="Spiget 源暂不支持版本选择，请使用 Modrinth 源下载" /></div>
+          <div style={{ padding: 14 }}><Empty text="Spiget 源暂不支持版本选择，请使用 Modrinth 或 CurseForge 源下载" /></div>
         )}
         {progress && <div className="progress-view" style={{ minHeight: 60, padding: 14 }}><strong>{progress.fileName}</strong><div className="progress-track"><i style={{ width: `${progress.percent}%` }} /></div><span>{progress.status === "completed" ? "下载完成" : `${progress.percent.toFixed(1)}%`}</span></div>}
       </div>
@@ -820,7 +762,7 @@ export function PluginMarketView({ instancePath, onError, kind: fixedKind }: Com
       <div>
         <div className="market-hero" style={{ marginBottom: 12 }}>
           <strong>{kind === "plugins" ? "🔥 最热插件" : "🔥 最热模组"}</strong>
-          <span>来自 {source === "modrinth" ? "Modrinth" : "Spiget"} · 按下载量排序</span>
+          <span>来自 {source === "modrinth" ? "Modrinth" : source === "curseforge" ? "CurseForge" : "Spiget"} · 按下载量排序</span>
         </div>
         <div className="popular-grid">
           {popular.map(item => (

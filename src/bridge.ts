@@ -395,12 +395,20 @@ export async function downloadServerCore(instancePath: string, coreName: string,
 
 export async function listOfficialCoreVersions(coreName: string): Promise<string[]> {
   if (isTauriRuntime()) return invoke("list_official_core_versions", { coreName });
-  return [];
+  try {
+    return await webInvoke("list_official_core_versions", { coreName });
+  } catch {
+    return [];
+  }
 }
 
 export async function listOfficialCoreBuilds(coreName: string, mcVersion: string): Promise<BuildInfo[]> {
   if (isTauriRuntime()) return invoke("list_official_core_builds", { coreName, mcVersion });
-  return [];
+  try {
+    return await webInvoke("list_official_core_builds", { coreName, mcVersion });
+  } catch {
+    return [];
+  }
 }
 
 export async function downloadOfficialServerCore(instancePath: string, coreName: string, mcVersion: string, build: string): Promise<string> {
@@ -441,6 +449,16 @@ export async function searchModrinth(query: string, kind: string): Promise<Plugi
 export async function getModrinthVersions(projectId: string): Promise<PluginVersion[]> {
   if (isTauriRuntime()) return invoke("get_modrinth_versions", { projectId });
   return webInvoke("get_modrinth_versions", { projectId });
+}
+
+export async function searchCurseForge(query: string, kind: string, apiKey: string): Promise<PluginInfo[]> {
+  if (isTauriRuntime()) return invoke("search_curseforge", { query, kind, apiKey });
+  return webInvoke("search_curseforge", { query, kind, apiKey });
+}
+
+export async function getCurseForgeFiles(modId: string, apiKey: string): Promise<PluginVersion[]> {
+  if (isTauriRuntime()) return invoke("get_curseforge_files", { modId, apiKey });
+  return webInvoke("get_curseforge_files", { modId, apiKey });
 }
 
 
