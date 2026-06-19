@@ -187,8 +187,8 @@ export function AiAssistant({ instance, running, metrics, consoleLines, onError 
         <textarea value={systemPrompt} onChange={event => setSystemPrompt(event.target.value)} rows={4} placeholder={DEFAULT_SYSTEM_PROMPT} />
       </label>
 
-      <label className="ai-toggle"><span>记住 API 密钥</span><input type="checkbox" checked={rememberKey} onChange={event => setRememberKey(event.target.checked)} /></label>
-      <label className="ai-toggle"><span>附带最近 80 行日志</span><input type="checkbox" checked={includeLogs} onChange={event => setIncludeLogs(event.target.checked)} /></label>
+      <label className="ai-toggle"><span>记住 API 密钥</span><select value={String(rememberKey)} onChange={event => setRememberKey(event.target.value === "true")}><option value="true">是</option><option value="false">否</option></select></label>
+      <label className="ai-toggle"><span>附带最近 80 行日志</span><select value={String(includeLogs)} onChange={event => setIncludeLogs(event.target.value === "true")}><option value="true">是</option><option value="false">否</option></select></label>
       <p>默认仅在当前会话保存密钥。提问时，选中的日志与服务器状态会发送到你配置的 AI 接口。</p>
       <button className="primary" onClick={saveSettings}>保存设置</button>
     </div>}

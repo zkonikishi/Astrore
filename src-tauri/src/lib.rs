@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use base64::{engine::general_purpose, Engine as _};
 use std::{
     collections::BTreeMap,
     fs,
@@ -28,6 +29,110 @@ fn app_user_agent_with_contact() -> String {
     format!("Astrore/{} (zkonikishi)", env!("CARGO_PKG_VERSION"))
 }
 
+fn host_matches(host: &str, domain: &str) -> bool {
+    host == domain || host.ends_with(&format!(".{domain}"))
+}
+
+fn is_allowed_java_download_host(host: &str) -> bool {
+    [
+        "adoptium.net",
+        "microsoft.com",
+        "azul.com",
+        "download.oracle.com",
+        "github.com",
+        "githubusercontent.com",
+    ]
+    .iter()
+    .any(|domain| host_matches(host, domain))
+}
+
+fn astrore_data_dir() -> Result<PathBuf, String> {
+    let dir = dirs_next::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("astrore");
+    fs::create_dir_all(&dir).map_err(|error| format!("Create Astrore data directory failed: {error}"))?;
+    Ok(dir)
+}
+
+fn secret_key() -> [u8; 32] {
+    let user = std::env::var("USERNAME")
+        .or_else(|_| std::env::var("USER"))
+        .unwrap_or_else(|_| "unknown".into());
+    let home = dirs_next::home_dir()
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_default();
+    Sha256::digest(format!("Astrore local secrets:{user}:{home}").as_bytes()).into()
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn hex_decode(text: &str) -> Result<Vec<u8>, String> {
+    if text.len() % 2 != 0 {
+        return Err("Invalid encrypted secret".into());
+    }
+    (0..text.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(&text[index..index + 2], 16).map_err(|_| "Invalid encrypted secret".into()))
+        .collect()
+}
+
+fn crypt_secret(text: &[u8]) -> Vec<u8> {
+    let key = secret_key();
+    let mut output = Vec::with_capacity(text.len());
+    let mut counter = 0u64;
+    while output.len() < text.len() {
+        let mut hasher = Sha256::new();
+        hasher.update(key);
+        hasher.update(counter.to_le_bytes());
+        let block = hasher.finalize();
+        for byte in block {
+            if output.len() == text.len() {
+                break;
+            }
+            output.push(text[output.len()] ^ byte);
+        }
+        counter += 1;
+    }
+    output
+}
+
+fn secrets_path() -> Result<PathBuf, String> {
+    Ok(astrore_data_dir()?.join("secrets.json"))
+}
+
+fn read_secret(name: &str) -> Result<String, String> {
+    let path = secrets_path()?;
+    if !path.exists() {
+        return Ok(String::new());
+    }
+    let data: BTreeMap<String, String> = serde_json::from_str(&fs::read_to_string(&path).map_err(|error| format!("Read secrets failed: {error}"))?)
+        .map_err(|error| format!("Parse secrets failed: {error}"))?;
+    let Some(encrypted) = data.get(name) else {
+        return Ok(String::new());
+    };
+    let decrypted = crypt_secret(&hex_decode(encrypted)?);
+    String::from_utf8(decrypted).map_err(|_| "Secret is not valid UTF-8".into())
+}
+
+fn write_secret(name: &str, value: &str) -> Result<(), String> {
+    let path = secrets_path()?;
+    let mut data: BTreeMap<String, String> = if path.exists() {
+        serde_json::from_str(&fs::read_to_string(&path).map_err(|error| format!("Read secrets failed: {error}"))?)
+            .map_err(|error| format!("Parse secrets failed: {error}"))?
+    } else {
+        BTreeMap::new()
+    };
+    if value.trim().is_empty() {
+        data.remove(name);
+    } else {
+        data.insert(name.into(), hex_encode(&crypt_secret(value.trim().as_bytes())));
+    }
+    fs::write(&path, serde_json::to_string_pretty(&data).map_err(|error| format!("Serialize secrets failed: {error}"))?)
+        .map_err(|error| format!("Save secrets failed: {error}"))
+}
+
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -44,6 +149,21 @@ fn hide_subprocess_window(_: &mut Command) {}
 struct EulaState {
     accepted: bool,
     path: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PickedServerCore {
+    instance_path: String,
+    server_jar: String,
+    instance_name: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagedServerState {
+    instance_path: String,
+    cores: Vec<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -279,6 +399,50 @@ fn safe_path(instance_path: &str, relative_path: &str) -> Result<PathBuf, String
     Ok(resolved)
 }
 
+fn managed_server_dir() -> Result<PathBuf, String> {
+    let base = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+        .unwrap_or(std::env::current_dir().map_err(|error| format!("无法读取应用目录: {error}"))?);
+    let dir = base.join("MCServers");
+    fs::create_dir_all(&dir).map_err(|error| format!("创建 MCServers 目录失败: {error}"))?;
+    dir.canonicalize().map_err(|error| format!("无法读取 MCServers 目录: {error}"))
+}
+
+fn scan_server_jars(root: &Path) -> Result<Vec<String>, String> {
+    let mut jars = Vec::new();
+    for entry in fs::read_dir(root).map_err(|error| format!("扫描 MCServers 失败: {error}"))? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        if path.is_file()
+            && path.extension().and_then(|value| value.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("jar"))
+        {
+            if let Some(name) = path.file_name().and_then(|value| value.to_str()) {
+                jars.push(name.to_string());
+            }
+        }
+    }
+    jars.sort_by_key(|name| name.to_lowercase());
+    Ok(jars)
+}
+
+fn managed_server_state() -> Result<ManagedServerState, String> {
+    let root = managed_server_dir()?;
+    Ok(ManagedServerState {
+        instance_path: root.to_string_lossy().to_string(),
+        cores: scan_server_jars(&root)?,
+    })
+}
+
+fn picked_server_core(file_name: String) -> Result<PickedServerCore, String> {
+    let state = managed_server_state()?;
+    Ok(PickedServerCore {
+        instance_path: state.instance_path,
+        server_jar: file_name,
+        instance_name: "MCServers".into(),
+    })
+}
+
 fn read_json_list(path: &Path) -> Vec<serde_json::Value> {
     fs::read_to_string(path)
         .ok()
@@ -439,8 +603,13 @@ fn list_directory(instance_path: String, relative_path: String) -> Result<Vec<Fi
     ensure_local_management()?;
     let root = safe_root(&instance_path)?;
     let directory = safe_path(&instance_path, &relative_path)?;
-    if !directory.exists() && matches!(relative_path.as_str(), "plugins" | "mods") {
-        fs::create_dir_all(&directory).map_err(|error| format!("创建目录失败: {error}"))?;
+    if !directory.exists() {
+        let top = relative_path.split(['/', '\\']).next().unwrap_or_default();
+        if matches!(top, "plugins" | "mods" | "config" | "logs" | "world") {
+            fs::create_dir_all(&directory).map_err(|error| format!("创建目录失败: {error}"))?;
+        } else {
+            return Ok(Vec::new());
+        }
     }
     if !directory.is_dir() {
         return Err("目标不是目录".into());
@@ -593,6 +762,52 @@ fn write_properties(
 }
 
 #[tauri::command]
+fn get_managed_server_state() -> Result<ManagedServerState, String> {
+    ensure_local_management()?;
+    managed_server_state()
+}
+
+#[tauri::command]
+fn pick_server_core() -> Result<Option<PickedServerCore>, String> {
+    ensure_local_management()?;
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("Minecraft server core", &["jar"])
+        .pick_file()
+    else {
+        return Ok(None);
+    };
+    let path = path.canonicalize().unwrap_or(path);
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or("服务端核心文件名无效")?
+        .to_string();
+    if !file_name.to_lowercase().ends_with(".jar") {
+        return Err("请选择 .jar 服务端核心文件".into());
+    }
+    let root = managed_server_dir()?;
+    fs::copy(&path, root.join(&file_name)).map_err(|error| format!("导入服务端核心失败: {error}"))?;
+    Ok(Some(picked_server_core(file_name)?))
+}
+
+#[tauri::command]
+fn import_server_core_file(file_name: String, content_base64: String) -> Result<PickedServerCore, String> {
+    ensure_local_management()?;
+    let safe_name = Path::new(&file_name)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| value.to_lowercase().ends_with(".jar"))
+        .ok_or("请选择 .jar 服务端核心文件")?
+        .to_string();
+    let bytes = general_purpose::STANDARD
+        .decode(content_base64.trim())
+        .map_err(|error| format!("解析服务端核心失败: {error}"))?;
+    let root = managed_server_dir()?;
+    fs::write(root.join(&safe_name), bytes).map_err(|error| format!("导入服务端核心失败: {error}"))?;
+    picked_server_core(safe_name)
+}
+
+#[tauri::command]
 fn read_player_lists(instance_path: String) -> Result<PlayerLists, String> {
     ensure_local_management()?;
     let root = safe_root(&instance_path)?;
@@ -693,17 +908,7 @@ async fn update_player(
 
 #[tauri::command]
 async fn list_server_cores() -> Result<Vec<CoreInfo>, String> {
-    let data: serde_json::Value = reqwest::Client::new()
-        .get("https://download.fastmirror.net/api/v3")
-        .header("User-Agent", app_user_agent())
-        .send()
-        .await
-        .map_err(|error| format!("获取核心列表失败: {error}"))?
-        .error_for_status()
-        .map_err(|error| format!("核心列表请求失败: {error}"))?
-        .json()
-        .await
-        .map_err(|error| format!("解析核心列表失败: {error}"))?;
+    let data = fetch_json("https://download.fastmirror.net/api/v3").await?;
     Ok(data["data"]
         .as_array()
         .into_iter()
@@ -722,8 +927,21 @@ async fn list_server_cores() -> Result<Vec<CoreInfo>, String> {
         .collect())
 }
 
+async fn resolve_fastmirror_core_name(core_name: &str) -> Result<String, String> {
+    let data = fetch_json("https://download.fastmirror.net/api/v3").await?;
+    data["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item["name"].as_str())
+        .find(|name| name.eq_ignore_ascii_case(core_name))
+        .map(str::to_string)
+        .ok_or_else(|| format!("FastMirror does not provide core: {core_name}"))
+}
+
 #[tauri::command]
 async fn list_core_builds(core_name: String, mc_version: String) -> Result<Vec<BuildInfo>, String> {
+    let core_name = resolve_fastmirror_core_name(&core_name).await?;
     let url = format!("https://download.fastmirror.net/api/v3/{core_name}/{mc_version}");
     let data: serde_json::Value = reqwest::Client::new()
         .get(url)
@@ -762,6 +980,7 @@ async fn download_server_core(
     ensure_local_management()?;
     app.state::<AppState>().cancel_download.store(false, Ordering::SeqCst);
     let root = safe_root(&instance_path)?;
+    let core_name = resolve_fastmirror_core_name(&core_name).await?;
     let info_url =
         format!("https://download.fastmirror.net/api/v3/{core_name}/{mc_version}/{build}");
     let client = reqwest::Client::new();
@@ -1249,19 +1468,15 @@ fn set_auto_restart_config(
 #[tauri::command]
 async fn search_curseforge(query: String, kind: String, api_key: String) -> Result<Vec<PluginInfo>, String> {
     let class_id = if kind == "mods" { "6" } else { "4471" }; // 6=Mods, 4471=Bukkit Plugins
-    let data: serde_json::Value = reqwest::Client::new()
+    let response = reqwest::Client::new()
         .get("https://api.curseforge.com/v1/mods/search")
         .query(&[("gameId", "432"), ("classId", class_id), ("searchFilter", &query), ("pageSize", "20")])
         .header("x-api-key", &api_key)
         .header("User-Agent", app_user_agent_with_contact())
         .send()
         .await
-        .map_err(|e| format!("CurseForge 搜索失败: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("CurseForge 请求失败 (检查 API Key 是否正确): {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("解析失败: {e}"))?;
+        .map_err(|e| format!("CurseForge search failed: {e}"))?;
+    let data = parse_json_response(response, "CurseForge search").await?;
     Ok(data["data"]
         .as_array()
         .into_iter()
@@ -1285,19 +1500,15 @@ async fn search_curseforge(query: String, kind: String, api_key: String) -> Resu
 
 #[tauri::command]
 async fn get_curseforge_files(mod_id: String, api_key: String) -> Result<Vec<PluginVersion>, String> {
-    let data: serde_json::Value = reqwest::Client::new()
+    let response = reqwest::Client::new()
         .get(format!("https://api.curseforge.com/v1/mods/{mod_id}/files"))
         .query(&[("pageSize", "20")])
         .header("x-api-key", &api_key)
         .header("User-Agent", app_user_agent_with_contact())
         .send()
         .await
-        .map_err(|e| format!("CurseForge 获取文件失败: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("CurseForge 请求失败: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("解析失败: {e}"))?;
+        .map_err(|e| format!("CurseForge files request failed: {e}"))?;
+    let data = parse_json_response(response, "CurseForge files").await?;
     Ok(data["data"]
         .as_array()
         .into_iter()
@@ -1321,6 +1532,16 @@ async fn get_curseforge_files(mod_id: String, api_key: String) -> Result<Vec<Plu
             })
         })
         .collect())
+}
+
+#[tauri::command]
+fn get_curseforge_api_key() -> Result<String, String> {
+    read_secret("curseforge_api_key")
+}
+
+#[tauri::command]
+fn save_curseforge_api_key(api_key: String) -> Result<(), String> {
+    write_secret("curseforge_api_key", &api_key)
 }
 
 #[tauri::command]
@@ -1405,6 +1626,101 @@ async fn get_modrinth_versions(project_id: String) -> Result<Vec<PluginVersion>,
 }
 
 #[tauri::command]
+async fn search_hangar(query: String) -> Result<Vec<PluginInfo>, String> {
+    let response_text = reqwest::Client::new()
+        .get("https://hangar.papermc.io/api/v1/projects")
+        .query(&[("query", query.as_str()), ("limit", "20"), ("offset", "0")])
+        .header("User-Agent", app_user_agent_with_contact())
+        .send()
+        .await
+        .map_err(|e| format!("Hangar search failed: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("Hangar request failed: {e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("Read Hangar response failed: {e}"))?;
+    if response_text.trim().is_empty() {
+        return Err("Hangar returned an empty response".into());
+    }
+    let data: serde_json::Value = serde_json::from_str(&response_text)
+        .map_err(|e| format!("Parse Hangar response failed: {e}"))?;
+    Ok(data["result"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|item| {
+            let owner = item["namespace"]["owner"].as_str().unwrap_or_default();
+            let slug = item["namespace"]["slug"].as_str().unwrap_or_else(|| item["name"].as_str().unwrap_or_default());
+            PluginInfo {
+                project_id: format!("{owner}/{slug}").trim_matches('/').to_string(),
+                name: slug.to_string(),
+                title: item["name"].as_str().unwrap_or_default().to_string(),
+                description: item["description"].as_str().unwrap_or_default().to_string(),
+                icon_url: item["avatarUrl"].as_str().unwrap_or_default().to_string(),
+                downloads: item["stats"]["downloads"].as_u64().unwrap_or(0),
+                categories: vec![
+                    "paper".into(),
+                    item["category"].as_str().unwrap_or("plugin").to_string(),
+                ],
+            }
+        })
+        .collect())
+}
+
+#[tauri::command]
+async fn get_hangar_versions(project_id: String) -> Result<Vec<PluginVersion>, String> {
+    let safe_id = project_id
+        .split('/')
+        .filter(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.')))
+        .collect::<Vec<_>>()
+        .join("/");
+    if safe_id.is_empty() {
+        return Err("Invalid Hangar project ID".into());
+    }
+    let response_text = reqwest::Client::new()
+        .get(format!("https://hangar.papermc.io/api/v1/projects/{safe_id}/versions"))
+        .query(&[("limit", "20"), ("offset", "0")])
+        .header("User-Agent", app_user_agent_with_contact())
+        .send()
+        .await
+        .map_err(|e| format!("Hangar versions failed: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("Hangar request failed: {e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("Read Hangar response failed: {e}"))?;
+    if response_text.trim().is_empty() {
+        return Err("Hangar returned an empty response".into());
+    }
+    let data: serde_json::Value = serde_json::from_str(&response_text)
+        .map_err(|e| format!("Parse Hangar response failed: {e}"))?;
+    Ok(data["result"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            let platform = if item["downloads"]["PAPER"].is_object() { "paper" } else { "velocity" };
+            let download = item["downloads"]["PAPER"].as_object()
+                .or_else(|| item["downloads"]["VELOCITY"].as_object())?;
+            let file_name = download["fileInfo"]["name"].as_str()?.to_string();
+            Some(PluginVersion {
+                name: item["name"].as_str().unwrap_or(&file_name).to_string(),
+                version_number: item["name"].as_str().unwrap_or(&file_name).to_string(),
+                download_url: download["downloadUrl"].as_str().unwrap_or_default().to_string(),
+                file_name,
+                game_versions: item["platformDependencies"]["PAPER"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|value| value.as_str().map(str::to_string))
+                    .collect(),
+                loaders: vec![platform.into()],
+            })
+        })
+        .collect())
+}
+
+#[tauri::command]
 async fn download_plugin(
     instance_path: String,
     download_url: String,
@@ -1424,7 +1740,7 @@ async fn download_plugin(
     let url = reqwest::Url::parse(&download_url).map_err(|_| "无效的下载地址")?;
     let host = url.host_str().ok_or("下载地址缺少主机名")?;
     if url.scheme() != "https"
-        || !(host == "modrinth.com" || host.ends_with(".modrinth.com") || host == "forgecdn.net" || host.ends_with(".forgecdn.net"))
+        || !(host == "modrinth.com" || host.ends_with(".modrinth.com") || host == "forgecdn.net" || host.ends_with(".forgecdn.net") || host == "hangarcdn.papermc.io")
     {
         return Err("只允许从 Modrinth 官方 HTTPS 地址下载".into());
     }
@@ -1503,30 +1819,116 @@ struct CoreTypeInfo {
     recommend: bool,
 }
 
-static CORE_TYPES: LazyLock<Vec<CoreTypeInfo>> = LazyLock::new(|| {
-    vec![
-        CoreTypeInfo { name: "paper".into(), label: "Paper \u{2b50} (\u{63a8}\u{8350})".into(), category: "pure".into(), recommend: true },
-        CoreTypeInfo { name: "purpur".into(), label: "Purpur".into(), category: "pure".into(), recommend: false },
-        CoreTypeInfo { name: "folia".into(), label: "Folia \u{26a1} (\u{591a}\u{7ebf}\u{7a0b})".into(), category: "pure".into(), recommend: false },
-        CoreTypeInfo { name: "leaves".into(), label: "Leaves".into(), category: "pure".into(), recommend: false },
-        CoreTypeInfo { name: "spongevanilla".into(), label: "SpongeVanilla".into(), category: "pure".into(), recommend: false },
-        CoreTypeInfo { name: "vanilla".into(), label: "Vanilla (\u{539f}\u{7248})".into(), category: "vanilla".into(), recommend: false },
-        CoreTypeInfo { name: "fabric".into(), label: "Fabric (\u{6a21}\u{7ec4})".into(), category: "mod".into(), recommend: false },
-        CoreTypeInfo { name: "forge".into(), label: "Forge (\u{6a21}\u{7ec4})".into(), category: "mod".into(), recommend: false },
-        CoreTypeInfo { name: "arclight".into(), label: "Arclight \u{2b50} (\u{6a21}\u{7ec4}+\u{63d2}\u{4ef6})".into(), category: "mod".into(), recommend: true },
-        CoreTypeInfo { name: "catserver".into(), label: "CatServer (\u{6a21}\u{7ec4}+\u{63d2}\u{4ef6})".into(), category: "mod".into(), recommend: false },
-        CoreTypeInfo { name: "spongeforge".into(), label: "SpongeForge (\u{6a21}\u{7ec4})".into(), category: "mod".into(), recommend: false },
-        CoreTypeInfo { name: "spongeneo".into(), label: "SpongeNeo (\u{6a21}\u{7ec4})".into(), category: "mod".into(), recommend: false },
-        CoreTypeInfo { name: "velocity".into(), label: "Velocity (\u{4ee3}\u{7406})".into(), category: "proxy".into(), recommend: false },
-        CoreTypeInfo { name: "bungeecord".into(), label: "BungeeCord (\u{4ee3}\u{7406})".into(), category: "proxy".into(), recommend: false },
-        CoreTypeInfo { name: "nukkit".into(), label: "Nukkit (\u{57fa}\u{5ca9}\u{7248})".into(), category: "bedrock".into(), recommend: false },
-        CoreTypeInfo { name: "pocketmine".into(), label: "PocketMine (\u{57fa}\u{5ca9}\u{7248})".into(), category: "bedrock".into(), recommend: false },
-    ]
-});
+fn core_category(name: &str, tag: &str) -> &'static str {
+    match name.to_ascii_lowercase().as_str() {
+        "paper" | "folia" | "purpur" | "leaves" => "plugin",
+        "fabric" | "forge" | "neoforge" | "spongeforge" | "spongeneo" => "mod",
+        "arclight" | "catserver" => "hybrid",
+        "vanilla" => "vanilla",
+        "velocity" | "bungeecord" | "waterfall" => "proxy",
+        "nukkit" | "pocketmine" | "bedrock_vanilla" => "bedrock",
+        _ => match tag {
+            "pure" => "plugin",
+            "mod" => "mod",
+            "proxy" => "proxy",
+            "vanilla" => "vanilla",
+            "bedrock" => "bedrock",
+            _ => "plugin",
+        },
+    }
+}
+
+fn core_category_rank(category: &str) -> u8 {
+    match category {
+        "plugin" => 1,
+        "mod" => 2,
+        "hybrid" => 3,
+        "vanilla" => 4,
+        "proxy" => 5,
+        "bedrock" => 6,
+        _ => 9,
+    }
+}
 
 #[tauri::command]
-fn get_core_types() -> Result<Vec<CoreTypeInfo>, String> {
-    Ok(CORE_TYPES.clone())
+async fn get_core_types() -> Result<Vec<CoreTypeInfo>, String> {
+    let data = fetch_json("https://download.fastmirror.net/api/v3").await?;
+    let mut types: Vec<CoreTypeInfo> = data["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|item| {
+            let name = item["name"].as_str().unwrap_or_default().to_string();
+            let tag = item["tag"].as_str().unwrap_or_default().to_string();
+            let recommend = item["recommend"].as_bool().unwrap_or(false);
+            let label = match name.as_str() {
+                "Paper" if recommend => "Paper ⭐ (推荐)".into(),
+                "Arclight" if recommend => "Arclight ⭐ (混合)".into(),
+                "Folia" => "Folia ⚡ (多线程)".into(),
+                "Fabric" => "Fabric (模组)".into(),
+                "Forge" => "Forge (模组)".into(),
+                "Arclight" => "Arclight (混合)".into(),
+                "CatServer" => "CatServer (混合)".into(),
+                "SpongeForge" => "SpongeForge (模组)".into(),
+                "SpongeNeo" => "SpongeNeo (模组)".into(),
+                "Vanilla" => "Vanilla (原版)".into(),
+                "BungeeCord" => "BungeeCord (代理)".into(),
+                "Nukkit" => "Nukkit (基岩版)".into(),
+                "PocketMine" => "PocketMine (基岩版)".into(),
+                _ => name.clone(),
+            };
+            let category = core_category(&name, &tag).to_string();
+            CoreTypeInfo { name: name.to_lowercase(), label, category, recommend }
+        })
+        .collect();
+    types.push(CoreTypeInfo { name: "velocity".into(), label: "Velocity (代理)".into(), category: "proxy".into(), recommend: false });
+    types.push(CoreTypeInfo { name: "bedrock_vanilla".into(), label: "Bedrock Vanilla (基岩原版)".into(), category: "bedrock".into(), recommend: false });
+    types.sort_by(|a, b| {
+        core_category_rank(&a.category)
+            .cmp(&core_category_rank(&b.category))
+            .then_with(|| b.recommend.cmp(&a.recommend))
+            .then_with(|| a.label.cmp(&b.label))
+    });
+    Ok(types)
+}
+
+#[tauri::command]
+async fn list_unified_core_versions(core_name: String) -> Result<Vec<String>, String> {
+    if core_name == "bedrock_vanilla" { return Ok(vec![]); }
+    let fm_cores = list_server_cores().await?;
+    let fm_core = fm_cores.iter().find(|c| c.name.eq_ignore_ascii_case(&core_name));
+    if let Some(core) = fm_core {
+        return Ok(core.mc_versions.clone());
+    }
+    list_official_core_versions(core_name).await
+}
+
+#[tauri::command]
+async fn list_unified_core_builds(core_name: String, mc_version: String) -> Result<Vec<BuildInfo>, String> {
+    if core_name == "bedrock_vanilla" { return Ok(vec![]); }
+    let fm_cores = list_server_cores().await?;
+    let fm_core = fm_cores.iter().find(|c| c.name.eq_ignore_ascii_case(&core_name));
+    if fm_core.is_some() {
+        match list_core_builds(core_name.clone(), mc_version.clone()).await {
+            Ok(builds) if !builds.is_empty() => return Ok(builds),
+            _ => {}
+        }
+    }
+    list_official_core_builds(core_name, mc_version).await
+}
+
+#[tauri::command]
+async fn download_unified_server_core(app: tauri::AppHandle, instance_path: String, core_name: String, mc_version: String, build: String) -> Result<String, String> {
+    if core_name == "bedrock_vanilla" { return Err("基岩原版暂不支持下载".into()); }
+    let fm_cores = list_server_cores().await?;
+    let fm_core = fm_cores.iter().find(|c| c.name.eq_ignore_ascii_case(&core_name));
+    if fm_core.is_some() {
+        match download_server_core(instance_path.clone(), core_name.clone(), mc_version.clone(), build.clone(), app.clone()).await {
+            Ok(name) => return Ok(name),
+            Err(_) => {}
+        }
+    }
+    download_official_server_core(instance_path, core_name, mc_version, build, app).await
 }
 
 async fn fetch_json(url: &str) -> Result<serde_json::Value, String> {
@@ -1538,6 +1940,19 @@ async fn fetch_json(url: &str) -> Result<serde_json::Value, String> {
     let text = resp.text().await.map_err(|e| format!("读取响应失败: {e}"))?;
     if text.trim().is_empty() { return Err("API 返回空响应".into()); }
     serde_json::from_str(&text).map_err(|e| format!("解析失败: {e}"))
+}
+
+async fn parse_json_response(response: reqwest::Response, label: &str) -> Result<serde_json::Value, String> {
+    let status = response.status();
+    let text = response.text().await.map_err(|error| format!("{label} read response failed: {error}"))?;
+    let preview: String = text.chars().take(180).collect();
+    if !status.is_success() {
+        return Err(format!("{label} request failed ({status}): {preview}"));
+    }
+    if text.trim().is_empty() {
+        return Err(format!("{label} returned an empty response; retry later or switch source"));
+    }
+    serde_json::from_str(&text).map_err(|error| format!("{label} response parse failed: {error}; first 180 chars: {preview}"))
 }
 
 #[tauri::command]
@@ -1726,8 +2141,7 @@ async fn download_to_instance(
     Ok(safe_name)
 }
 
-#[tauri::command]
-async fn list_java_releases(vendor: Option<String>) -> Result<Vec<JavaRelease>, String> {
+async fn list_java_releases_safe(vendor: Option<String>, java_version: Option<u32>) -> Result<Vec<JavaRelease>, String> {
     let vendor_code = match vendor.as_deref() {
         Some("temurin") | None => "eclipse",
         Some("microsoft") => "microsoft",
@@ -1735,12 +2149,69 @@ async fn list_java_releases(vendor: Option<String>) -> Result<Vec<JavaRelease>, 
         Some("graalvm") => "graalvm",
         _ => "eclipse",
     };
-    let url = format!("https://api.adoptium.net/v3/assets/feature_releases/21/ga?page_size=20&image_type=jdk&jvm_impl=hotspot&vendor={vendor_code}");
-    let data: serde_json::Value = reqwest::Client::new()
+    let ver = java_version.unwrap_or(21);
+    let target_os = match std::env::consts::OS {
+        "windows" => "windows",
+        "macos" => "mac",
+        "linux" => "linux",
+        _ => "linux",
+    };
+    let target_arch = match std::env::consts::ARCH {
+        "x86_64" => "x64",
+        "aarch64" => "aarch64",
+        _ => "x64",
+    };
+    if vendor.as_deref() == Some("oracle") {
+        if !matches!(ver, 21 | 25) {
+            return Ok(Vec::new());
+        }
+        let os_part = match target_os {
+            "windows" => "windows",
+            "mac" => "macos",
+            "linux" => "linux",
+            _ => "linux",
+        };
+        let arch_part = match target_arch {
+            "aarch64" => "aarch64",
+            _ => "x64",
+        };
+        let ext = match target_os {
+            "windows" => "exe",
+            "mac" => "dmg",
+            _ => "tar.gz",
+        };
+        let file_name = format!("jdk-{ver}_{os_part}-{arch_part}_bin.{ext}");
+        return Ok(vec![JavaRelease {
+            version: format!("{ver}-latest"),
+            major: ver,
+            download_url: format!("https://download.oracle.com/java/{ver}/latest/{file_name}"),
+            file_name,
+            size_mb: 0.0,
+        }]);
+    }
+    let url = format!("https://api.adoptium.net/v3/assets/feature_releases/{ver}/ga?page_size=20&image_type=jdk&jvm_impl=hotspot&vendor={vendor_code}");
+    let response = reqwest::Client::new()
         .get(url)
         .header("User-Agent", app_user_agent())
-        .send().await.map_err(|e| format!("获取 Java 列表失败: {e}"))?
-        .json().await.map_err(|e| format!("解析 Java 列表失败: {e}"))?;
+        .header("Accept", "application/json")
+        .header("Accept-Encoding", "identity")
+        .send()
+        .await
+        .map_err(|error| format!("Fetch Java list failed: {error}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("Read Java list response failed: {error}"))?;
+    let snippet = body.chars().take(180).collect::<String>();
+    if !status.is_success() {
+        return Err(format!("Fetch Java list failed: HTTP {status}; {snippet}"));
+    }
+    if body.trim().is_empty() {
+        return Err("Parse Java list failed: download source returned an empty response".into());
+    }
+    let data: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|error| format!("Parse Java list failed: {error}; response starts with: {snippet}"))?;
     let mut releases = Vec::new();
     for item in data.as_array().into_iter().flatten() {
         let version_data = &item["version_data"];
@@ -1749,13 +2220,20 @@ async fn list_java_releases(vendor: Option<String>) -> Result<Vec<JavaRelease>, 
         for binary in item["binaries"].as_array().into_iter().flatten() {
             let os = binary["os"].as_str().unwrap_or_default();
             let arch = binary["architecture"].as_str().unwrap_or_default();
-            if os != "windows" || arch != "x64" { continue; }
-            if let Some(pkg) = binary["installer"].as_object() {
+            if os != target_os || arch != target_arch {
+                continue;
+            }
+            if let Some(pkg) = binary["installer"].as_object().or_else(|| binary["package"].as_object()) {
+                let download_url = pkg["link"].as_str().unwrap_or_default().to_string();
+                let file_name = pkg["name"].as_str().unwrap_or_default().to_string();
+                if download_url.is_empty() || file_name.is_empty() {
+                    continue;
+                }
                 releases.push(JavaRelease {
                     version: version.clone(),
                     major,
-                    download_url: pkg["link"].as_str().unwrap_or_default().to_string(),
-                    file_name: pkg["name"].as_str().unwrap_or_default().to_string(),
+                    download_url,
+                    file_name,
                     size_mb: pkg["size"].as_f64().unwrap_or(0.0) / 1_048_576.0,
                 });
             }
@@ -1766,19 +2244,38 @@ async fn list_java_releases(vendor: Option<String>) -> Result<Vec<JavaRelease>, 
 }
 
 #[tauri::command]
+async fn list_java_releases(vendor: Option<String>, java_version: Option<u32>) -> Result<Vec<JavaRelease>, String> {
+    list_java_releases_safe(vendor, java_version).await
+}
+
+#[tauri::command]
 async fn download_java(
     download_url: String,
     file_name: String,
     app: AppHandle,
 ) -> Result<String, String> {
     app.state::<AppState>().cancel_download.store(false, Ordering::SeqCst);
+    let safe_name = Path::new(&file_name)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.trim().is_empty())
+        .ok_or("无效的文件名")?
+        .to_string();
+    let url = reqwest::Url::parse(&download_url).map_err(|error| format!("无效的下载地址: {error}"))?;
+    let host = url.host_str().ok_or("下载地址缺少主机名")?;
+    if url.scheme() != "https" || !is_allowed_java_download_host(host) {
+        return Err("不允许的 Java 下载地址".into());
+    }
     let target_dir = dirs_next::download_dir().unwrap_or_else(|| PathBuf::from("."));
-    let target = target_dir.join(&file_name);
-    let part = target_dir.join(format!("{file_name}.part"));
+    fs::create_dir_all(&target_dir).map_err(|e| format!("创建下载目录失败: {e}"))?;
+    let target = target_dir.join(&safe_name);
+    let part = target_dir.join(format!("{safe_name}.part"));
     let mut response = reqwest::Client::new()
-        .get(&download_url)
+        .get(url)
         .header("User-Agent", app_user_agent())
-        .send().await.map_err(|e| format!("下载失败: {e}"))?;
+        .send().await.map_err(|e| format!("下载失败: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("下载请求失败: {e}"))?;
     let total = response.content_length().unwrap_or(0);
     let mut downloaded = 0u64;
     let started_at = std::time::SystemTime::now()
@@ -1790,17 +2287,17 @@ async fn download_java(
         if check_cancel(app.state()) {
             drop(file);
             let _ = tokio::fs::remove_file(&part).await;
-            emit_progress(&app, &file_name, downloaded, total, "cancelled", started_at);
+            emit_progress(&app, &safe_name, downloaded, total, "cancelled", started_at);
             return Err("下载已取消".into());
         }
         file.write_all(&chunk).await.map_err(|e| format!("写入失败: {e}"))?;
         downloaded += chunk.len() as u64;
-        emit_progress(&app, &file_name, downloaded, total, "downloading", started_at);
+        emit_progress(&app, &safe_name, downloaded, total, "downloading", started_at);
     }
     file.flush().await.map_err(|e| format!("刷新失败: {e}"))?;
     tokio::fs::rename(&part, &target).await.map_err(|e| format!("保存失败: {e}"))?;
-    emit_progress(&app, &file_name, downloaded, total, "completed", started_at);
-    Ok(file_name)
+    emit_progress(&app, &safe_name, downloaded, total, "completed", started_at);
+    Ok(safe_name)
 }
 
 #[tauri::command]
@@ -2241,11 +2738,17 @@ pub fn run() {
             toggle_entry,
             read_properties,
             write_properties,
+            get_managed_server_state,
+            pick_server_core,
+            import_server_core_file,
             read_player_lists,
             update_player,
             list_server_cores,
             list_core_builds,
             download_server_core,
+            list_unified_core_versions,
+            list_unified_core_builds,
+            download_unified_server_core,
             list_official_core_versions,
             list_official_core_builds,
             download_official_server_core,
@@ -2254,8 +2757,12 @@ pub fn run() {
             set_auto_restart_config,
             search_modrinth,
             get_modrinth_versions,
+            search_hangar,
+            get_hangar_versions,
             search_curseforge,
             get_curseforge_files,
+            get_curseforge_api_key,
+            save_curseforge_api_key,
             download_plugin,
             get_core_types,
             list_java_releases,

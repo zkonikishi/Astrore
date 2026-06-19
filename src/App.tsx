@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type SyntheticEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   Activity,
@@ -39,36 +39,86 @@ import {
   connectAgentEvents,
   forceStopServer,
   getAutoRestartConfig,
+  getCurseForgeApiKey,
   getConsole,
   getMetrics,
+  getManagedServerState,
   getServerStatus,
   isTauriRuntime,
+  pickServerCore,
   readProperties,
   sendServerCommand,
   setAutoRestartConfig,
+  saveCurseForgeApiKey,
   startServer,
   stopServer,
   writeProperties,
   type AutoRestartConfig,
   type AgentConnection,
   type InstanceConfig,
+  type PickedServerCore,
   type PlatformCapabilities,
   type ServerMetrics,
   type ServerStatus,
 } from "./bridge";
 import { highlightLine } from "./consoleHighlighter";
 
+const AI_PROVIDER_LOGOS: Record<string, string> = {
+  ollama: "https://ollama.com/favicon.ico",
+  lmstudio: "https://lmstudio.ai/favicon.ico",
+  qwenpaw: "https://ollama.com/favicon.ico",
+  openai: "https://openai.com/favicon.ico",
+  anthropic: "https://www.anthropic.com/favicon.ico",
+  google: "https://www.google.com/favicon.ico",
+  groq: "https://groq.com/favicon.ico",
+  mistral: "https://mistral.ai/favicon.ico",
+  xai: "https://x.ai/favicon.ico",
+  perplexity: "https://www.perplexity.ai/favicon.ico",
+  cohere: "https://cohere.com/favicon.ico",
+  openrouter: "https://openrouter.ai/favicon.ico",
+  together: "https://www.together.ai/favicon.ico",
+  fireworks: "https://fireworks.ai/favicon.ico",
+  nvidia: "https://www.nvidia.com/favicon.ico",
+  cerebras: "https://www.cerebras.ai/favicon.ico",
+  sambanova: "https://sambanova.ai/favicon.ico",
+  huggingface: "https://huggingface.co/favicon.ico",
+  deepseek: "https://www.deepseek.com/favicon.ico",
+  qwen: "https://www.aliyun.com/favicon.ico",
+  "qwen-coding": "https://www.aliyun.com/favicon.ico",
+  "qwen-agent": "https://www.aliyun.com/favicon.ico",
+  zhipu: "https://open.bigmodel.cn/favicon.ico",
+  moonshot: "https://www.moonshot.cn/favicon.ico",
+  baichuan: "https://www.baichuan-ai.com/favicon.ico",
+  yi: "https://www.lingyiwanwu.com/favicon.ico",
+  minimax: "https://www.minimaxi.com/favicon.ico",
+  doubao: "https://www.volcengine.com/favicon.ico",
+  "doubao-coding": "https://www.volcengine.com/favicon.ico",
+  "doubao-agent": "https://www.volcengine.com/favicon.ico",
+  hunyuan: "https://cloud.tencent.com/favicon.ico",
+  "hunyuan-coding": "https://cloud.tencent.com/favicon.ico",
+  siliconflow: "https://siliconflow.cn/favicon.ico",
+  modelscope: "https://modelscope.cn/favicon.ico",
+  custom: "https://openai.com/favicon.ico",
+};
+
+const hideBrokenImage = (event: SyntheticEvent<HTMLImageElement>) => {
+  event.currentTarget.style.display = "none";
+  if (event.currentTarget.nextElementSibling instanceof HTMLElement) {
+    event.currentTarget.nextElementSibling.style.display = "inline";
+  }
+};
+
 type Tab = "overview" | "control" | "instance" | "files" | "permissions" | "software" | "download" | "extensions" | "about";
-type InstanceTab = "runtime" | "properties" | "rules" | "optimization";
+type InstanceTab = "runtime" | "properties" | "optimization";
 type FilesTab = "plugins" | "mods" | "backups";
-type SoftwareTab = "basic" | "ai";
+type SoftwareTab = "basic" | "mcp" | "ai";
 type DownloadTabKey = "java" | "core" | "plugins" | "mods";
 
 const DEFAULT_INSTANCE: InstanceConfig = {
   name: "我的世界服务器",
   instancePath: "",
   javaPath: "java",
-  serverJar: "server.jar",
+  serverJar: "",
   minMemoryMb: 2048,
   maxMemoryMb: 8192,
   javaArgs: ["-XX:+UseG1GC", "-XX:+ParallelRefProcEnabled"],
@@ -303,9 +353,12 @@ function App() {
     if (!agentAvailable) return setError("Agent 未连接，请先在软件设置中配置并启动 Agent");
     setError("");
     try {
-      const eula = await checkEula(instanceConfig.instancePath);
+      const managed = await syncManagedServer(true);
+      if (managed.state.cores.length === 0) return;
+      const runtimeConfig = managed.config;
+      const eula = await checkEula(runtimeConfig.instancePath);
       if (eula.accepted) {
-        const status = await startServer(instanceConfig);
+        const status = await startServer(runtimeConfig);
         setRunning(status.running);
         setStartedAt(Date.now());
       } else {
@@ -369,6 +422,32 @@ function App() {
     localStorage.setItem("astrore.activeInstance", String(index));
     localStorage.setItem("astrore.instance", JSON.stringify(next[index]));
   };
+
+  const updateActiveInstance = (patch: Partial<InstanceConfig>) => {
+    const merged = { ...instanceConfig, ...patch };
+    const next = instances.map((item, index) => index === activeInstanceIndex ? merged : item);
+    setInstanceConfig(merged);
+    setInstances(next);
+    persistInstances(next, activeInstanceIndex);
+  };
+
+  const syncManagedServer = async (jumpWhenEmpty = false) => {
+    const state = await getManagedServerState();
+    const serverJar = state.cores.includes(instanceConfig.serverJar) ? instanceConfig.serverJar : state.cores[0] ?? "";
+    const config = { ...instanceConfig, instancePath: state.instancePath, serverJar };
+    updateActiveInstance({ instancePath: state.instancePath, serverJar });
+    if (jumpWhenEmpty && state.cores.length === 0) {
+      setTab("download");
+      setDownloadTab("core");
+      setError("MCServers 目录下还没有服务端核心，请先下载或导入一个核心 jar");
+    }
+    return { state, config };
+  };
+
+  useEffect(() => {
+    if (!agentAvailable) return;
+    syncManagedServer(true).catch(() => undefined);
+  }, [agentAvailable]);
 
   const saveInstance = () => {
     const next = instances.map((item, index) => index === activeInstanceIndex ? instanceConfig : item);
@@ -592,11 +671,11 @@ function App() {
           )}
 
           {tab === "control" && <ControlPanel lines={consoleLines} command={command} setCommand={setCommand} sendCommand={sendCommand} running={running} start={start} stop={stop} forceStop={forceStop} metrics={sysMetrics} instance={instanceConfig} onError={setError} />}
-          {tab === "download" && <DownloadTab subTab={downloadTab} setSubTab={setDownloadTab} instancePath={instanceConfig.instancePath} onError={setError} />}
+          {tab === "download" && <DownloadTab subTab={downloadTab} setSubTab={setDownloadTab} instancePath={instanceConfig.instancePath} onError={setError} onCoreDownloaded={(serverJar) => updateActiveInstance({ serverJar })} />}
           {tab === "files" && <FilesHub subTab={filesTab} setSubTab={setFilesTab} instancePath={instanceConfig.instancePath} onError={setError} />}
           {tab === "permissions" && <PermissionsView instancePath={instanceConfig.instancePath} onError={setError} />}
           {tab === "extensions" && <ExtensionStoreView onError={setError} />}
-          {tab === "instance" && <InstanceConfigView subTab={instanceTab} setSubTab={setInstanceTab} mode={mode} config={instanceConfig} onChange={setInstanceConfig} onSave={saveInstance} instancePath={instanceConfig.instancePath} onError={setError} autoRestart={autoRestart} onAutoRestartChange={(c) => { setAutoRestart(c); localStorage.setItem("astrore.autoRestart", JSON.stringify(c)); setAutoRestartConfig(c).catch(reason => setError(String(reason))); }} />}
+          {tab === "instance" && <InstanceConfigView subTab={instanceTab} setSubTab={setInstanceTab} mode={mode} config={instanceConfig} onChange={setInstanceConfig} onSave={saveInstance} instancePath={instanceConfig.instancePath} onError={setError} onNeedDownload={() => { setTab("download"); setDownloadTab("core"); }} onCoreImported={(picked) => updateActiveInstance({ instancePath: picked.instancePath, serverJar: picked.serverJar, name: instanceConfig.name.trim() ? instanceConfig.name : picked.instanceName })} autoRestart={autoRestart} onAutoRestartChange={(c) => { setAutoRestart(c); localStorage.setItem("astrore.autoRestart", JSON.stringify(c)); setAutoRestartConfig(c).catch(reason => setError(String(reason))); }} />}
           {tab === "about" && <AboutView />}
           {tab === "software" && <SoftwareSettingsView subTab={softwareTab} setSubTab={setSoftwareTab} autoRestart={autoRestart} onAutoRestartChange={(c) => { setAutoRestart(c); localStorage.setItem("astrore.autoRestart", JSON.stringify(c)); setAutoRestartConfig(c).catch(reason => setError(String(reason))); }} />}
         </div>
@@ -681,13 +760,36 @@ function ControlPanel({ lines, command, setCommand, sendCommand, running, start,
   </section>;
 }
 
-function InstanceConfigView({ subTab, setSubTab, mode, config, onChange, onSave, instancePath, onError, autoRestart, onAutoRestartChange }: { subTab: InstanceTab; setSubTab: (tab: InstanceTab) => void; mode: string; config: InstanceConfig; onChange: (config: InstanceConfig) => void; onSave: () => void; instancePath: string; onError: (message: string) => void; autoRestart: AutoRestartConfig; onAutoRestartChange: (config: AutoRestartConfig) => void }) {
+function InstanceConfigView({ subTab, setSubTab, mode, config, onChange, onSave, instancePath, onError, onNeedDownload, onCoreImported, autoRestart, onAutoRestartChange }: { subTab: InstanceTab; setSubTab: (tab: InstanceTab) => void; mode: string; config: InstanceConfig; onChange: (config: InstanceConfig) => void; onSave: () => void; instancePath: string; onError: (message: string) => void; onNeedDownload: () => void; onCoreImported: (picked: PickedServerCore) => void; autoRestart: AutoRestartConfig; onAutoRestartChange: (config: AutoRestartConfig) => void }) {
+  const [managedCores, setManagedCores] = useState<string[]>([]);
   const update = (value: Partial<InstanceConfig>) => onChange({ ...config, ...value });
-  return <section className="hub-page">
+  const loadManaged = async () => {
+    try {
+      const state = await getManagedServerState();
+      setManagedCores(state.cores);
+      update({
+        instancePath: state.instancePath,
+        serverJar: state.cores.includes(config.serverJar) ? config.serverJar : state.cores[0] ?? "",
+      });
+    } catch (error) {
+      onError(String(error));
+    }
+  };
+  useEffect(() => { loadManaged(); }, []);
+  const importServerCore = async () => {
+    try {
+      const picked = await pickServerCore();
+      if (!picked) return;
+      onCoreImported(picked);
+      await loadManaged();
+    } catch (error) {
+      onError(String(error));
+    }
+  };
+  return <section className="hub-page instance-page">
     <TopTabs<InstanceTab> value={subTab} onChange={setSubTab} tabs={[
       { key: "runtime", label: "本体设置" },
       { key: "properties", label: "server.properties 配置" },
-      { key: "rules", label: "服务器规则设置" },
       { key: "optimization", label: "Paper 等端优化设置" },
     ]} />
     {subTab === "runtime" && <div className="instance-runtime-grid">
@@ -696,52 +798,53 @@ function InstanceConfigView({ subTab, setSubTab, mode, config, onChange, onSave,
         <div className="inline-field-row"><select value={config.javaPath === "java" ? "default" : "custom"} onChange={event => update({ javaPath: event.target.value === "default" ? "java" : config.javaPath })}><option value="default">默认使用 [JAVA] 环境</option><option value="custom">自定义路径</option></select><button className="secondary" onClick={() => update({ javaPath: "java" })}>刷新</button><button className="secondary" onClick={() => update({ javaPath: prompt("Java 路径", config.javaPath) || config.javaPath })}>自定义路径</button></div>
         <label>Java 路径<input value={config.javaPath} onChange={(event) => update({ javaPath: event.target.value })} /></label>
         <div className="fieldset-title">软件窗口设置</div>
-        <div className="check-grid"><label><input type="checkbox" />窗口置顶</label><label><input type="checkbox" defaultChecked />启动时开服</label><label><input type="checkbox" />最小化到托盘</label><label><input type="checkbox" />同目录禁止多开</label></div>
+        <div className="check-grid"><label><span>窗口置顶</span><select defaultValue="false"><option value="true">是</option><option value="false">否</option></select></label><label><span>启动时开服</span><select defaultValue="true"><option value="true">是</option><option value="false">否</option></select></label><label><span>最小化到托盘</span><select defaultValue="false"><option value="true">是</option><option value="false">否</option></select></label><label><span>同目录禁止多开</span><select defaultValue="false"><option value="true">是</option><option value="false">否</option></select></label></div>
         <div className="fieldset-title">服务端编码设置</div>
-        <div className="check-grid"><label><input type="radio" name="display-encoding" defaultChecked />显示编码：系统默认</label><label><input type="radio" name="display-encoding" />UTF-8</label><label><input type="radio" name="send-encoding" defaultChecked />发送编码：系统默认</label><label><input type="radio" name="send-encoding" />UTF-8</label></div>
+        <div className="check-grid"><label><span>显示编码</span><select defaultValue="system"><option value="system">system</option><option value="UTF-8">UTF-8</option></select></label><label><span>发送编码</span><select defaultValue="system"><option value="system">system</option><option value="UTF-8">UTF-8</option></select></label></div>
+        <RuntimeRulesSettings instancePath={instancePath} onError={onError} />
         <div className="fieldset-title">服务端额外启动参数</div>
         <label>JVM 参数<textarea value={config.javaArgs.join(" ")} onChange={(event) => update({ javaArgs: event.target.value.split(/\s+/).filter(Boolean) })} /></label>
         <label>服务端参数<input value={config.serverArgs.join(" ")} onChange={(event) => update({ serverArgs: event.target.value.split(/\s+/).filter(Boolean) })} /></label>
       </div>
       <div className="panel settings-form"><PanelHeader icon={<Server />} title="服务端核心" action={config.serverJar || "未配置"} />
         <label>实例名称<input value={config.name} onChange={(event) => update({ name: event.target.value })} /></label>
-        <label>服务端目录<input value={config.instancePath} onChange={(event) => update({ instancePath: event.target.value })} placeholder="例如 D:\Minecraft\server" /></label>
-        <label>服务端核心<input value={config.serverJar} onChange={(event) => update({ serverJar: event.target.value })} /></label>
+        <label>托管目录<input value={config.instancePath || instancePath} readOnly placeholder="MCServers 将自动创建" /></label>
+        <div className="core-import-row">
+          <label>服务端核心<select value={config.serverJar} onChange={(event) => update({ serverJar: event.target.value })}>{managedCores.length === 0 ? <option value="">未发现核心 jar</option> : managedCores.map(core => <option key={core} value={core}>{core}</option>)}</select></label>
+          <button className="secondary" onClick={importServerCore}>导入</button>
+        </div>
+        {managedCores.length === 0 && <div className="managed-core-empty"><span>MCServers 目录下还没有核心 jar。</span><button className="primary" onClick={onNeedDownload}>去下载核心</button></div>}
         <div className="fieldset-title">内存设置（0 为自动分配）</div>
         <div className="form-grid"><label>最大内存<input type="number" min="0" value={config.maxMemoryMb} onChange={(event) => update({ maxMemoryMb: Number(event.target.value) })} /></label><label>最小内存<input type="number" min="0" value={config.minMemoryMb} onChange={(event) => update({ minMemoryMb: Number(event.target.value) })} /></label></div>
         <div className="fieldset-title">关服超时强制结束</div>
-        <div className="setting-row"><div><span>崩溃自动重启</span><small>服务端意外退出时自动重新启动</small></div><input type="checkbox" checked={autoRestart.enabled} onChange={(e) => onAutoRestartChange({ ...autoRestart, enabled: e.target.checked })} /></div>
+        <div className="setting-row"><div><span>崩溃自动重启</span><small>服务端意外退出时自动重新启动</small></div><select value={String(autoRestart.enabled)} onChange={(e) => onAutoRestartChange({ ...autoRestart, enabled: e.target.value === "true" })}><option value="true">是</option><option value="false">否</option></select></div>
         <div className="form-grid"><label>最大重启次数<input type="number" min={1} max={10} value={autoRestart.maxRestarts} onChange={(e) => onAutoRestartChange({ ...autoRestart, maxRestarts: Number(e.target.value) })} /></label><label>重启延迟（秒）<input type="number" min={1} max={60} value={autoRestart.restartDelaySecs} onChange={(e) => onAutoRestartChange({ ...autoRestart, restartDelaySecs: Number(e.target.value) })} /></label></div>
-        <label>自定义副标题<input placeholder="[灵工艺] 我的世界开服器 - 自定义副标题" /></label>
-        <div className="form-actions"><button className="secondary" onClick={() => update({ javaPath: "java", serverJar: "server.jar", minMemoryMb: 2048, maxMemoryMb: 8192, javaArgs: ["-XX:+UseG1GC", "-XX:+ParallelRefProcEnabled"], serverArgs: ["nogui"] })}>恢复默认</button><button className="primary" onClick={onSave}>保存设置</button></div>
+        <label>自定义副标题<input placeholder="我的世界服务器 - 自定义副标题" /></label>
+        <div className="form-actions"><button className="secondary" onClick={() => update({ javaPath: "java", serverJar: managedCores[0] ?? "", minMemoryMb: 2048, maxMemoryMb: 8192, javaArgs: ["-XX:+UseG1GC", "-XX:+ParallelRefProcEnabled"], serverArgs: ["nogui"] })}>恢复默认</button><button className="primary" onClick={onSave}>保存设置</button></div>
       </div>
     </div>}
     {subTab === "properties" && <PropertiesView instancePath={instancePath} onError={onError} />}
-    {subTab === "rules" && <RulesSettingsView instancePath={instancePath} onError={onError} />}
     {subTab === "optimization" && <div className="panel settings-form"><PanelHeader icon={<Gauge />} title="Paper / Purpur 优化建议" action="配置模板" />
       <div className="setting-row"><div><span>推荐使用 Aikar G1GC 参数</span><small>适合大多数 Paper/Folia/Purpur 服务端，保存后写入 JVM 参数。</small></div><button className="secondary" onClick={() => update({ javaArgs: ["-XX:+UseG1GC", "-XX:+ParallelRefProcEnabled", "-XX:MaxGCPauseMillis=200", "-XX:+UnlockExperimentalVMOptions", "-XX:+DisableExplicitGC"] })}>应用</button></div>
-      <div className="setting-row"><div><span>降低 entity-activation-range</span><small>后续会写入 paper-world-defaults.yml / spigot.yml。</small></div><input type="checkbox" /></div>
-      <div className="setting-row"><div><span>限制 hopper 检测频率</span><small>适合生电较多但不追求完全原版行为的服务器。</small></div><input type="checkbox" /></div>
-      <div className="setting-row"><div><span>启用 Paper 配置备份</span><small>改写优化项前保存原配置，避免误操作。</small></div><input type="checkbox" defaultChecked /></div>
+      <div className="setting-row"><div><span>降低 entity-activation-range</span><small>后续会写入 paper-world-defaults.yml / spigot.yml。</small></div><select defaultValue="false"><option value="true">是</option><option value="false">否</option></select></div>
+      <div className="setting-row"><div><span>限制 hopper 检测频率</span><small>适合生电较多但不追求完全原版行为的服务器。</small></div><select defaultValue="false"><option value="true">是</option><option value="false">否</option></select></div>
+      <div className="setting-row"><div><span>启用 Paper 配置备份</span><small>改写优化项前保存原配置，避免误操作。</small></div><select defaultValue="true"><option value="true">是</option><option value="false">否</option></select></div>
       <div className="form-actions"><button className="primary" onClick={onSave}>保存当前 JVM 参数</button></div>
     </div>}
   </section>;
 }
 
-function RulesSettingsView({ instancePath, onError }: { instancePath: string; onError: (message: string) => void }) {
+function RuntimeRulesSettings({ instancePath, onError }: { instancePath: string; onError: (message: string) => void }) {
   const [properties, setProperties] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
-  const [loaded, setLoaded] = useState(false);
 
   const load = async () => {
     if (!instancePath) {
       setProperties({});
-      setLoaded(false);
       return;
     }
     try {
       setProperties(await readProperties(instancePath));
-      setLoaded(true);
     } catch (error) {
       onError(String(error));
     }
@@ -755,7 +858,6 @@ function RulesSettingsView({ instancePath, onError }: { instancePath: string; on
     setSaving(true);
     try {
       await writeProperties(instancePath, properties);
-      setLoaded(true);
     } catch (error) {
       onError(String(error));
     } finally {
@@ -764,29 +866,22 @@ function RulesSettingsView({ instancePath, onError }: { instancePath: string; on
   };
 
   const bool = (key: string, fallback = "false") => properties[key] ?? fallback;
-  return <section className="rules-layout">
-    <div className="panel settings-form">
-      <PanelHeader icon={<ShieldCheck />} title="服务器规则设置" action={loaded ? "server.properties" : "等待读取"} />
-      <div className="form-grid">
-        <label>玩家游戏模式<select value={properties.gamemode ?? "survival" } onChange={event => update("gamemode", event.target.value)}><option value="survival">生存</option><option value="creative">创造</option><option value="adventure">冒险</option><option value="spectator">旁观</option></select></label>
-        <label>游戏世界难度<select value={properties.difficulty ?? "easy"} onChange={event => update("difficulty", event.target.value)}><option value="peaceful">和平</option><option value="easy">简单</option><option value="normal">普通</option><option value="hard">困难</option></select></label>
-        <label>最大玩家数量<input type="number" min="1" value={properties["max-players"] ?? "20"} onChange={event => update("max-players", event.target.value)} /></label>
-        <label>服务端端口<input type="number" min="1" max="65535" value={properties["server-port"] ?? "25565"} onChange={event => update("server-port", event.target.value)} /></label>
-      </div>
-      <div className="check-grid">
-        <label><input type="checkbox" checked={bool("online-mode", "true") === "true"} onChange={event => update("online-mode", String(event.target.checked))} />启用正版验证</label>
-        <label><input type="checkbox" checked={bool("white-list") === "true"} onChange={event => update("white-list", String(event.target.checked))} />启用白名单</label>
-        <label><input type="checkbox" checked={bool("pvp", "true") === "true"} onChange={event => update("pvp", String(event.target.checked))} />允许 PVP</label>
-        <label><input type="checkbox" checked={bool("enable-command-block") === "true"} onChange={event => update("enable-command-block", String(event.target.checked))} />启用命令方块</label>
-        <label><input type="checkbox" checked={bool("allow-flight") === "true"} onChange={event => update("allow-flight", String(event.target.checked))} />允许飞行</label>
-        <label><input type="checkbox" checked={bool("spawn-animals", "true") === "true"} onChange={event => update("spawn-animals", String(event.target.checked))} />生成动物</label>
-        <label><input type="checkbox" checked={bool("spawn-monsters", "true") === "true"} onChange={event => update("spawn-monsters", String(event.target.checked))} />生成怪物</label>
-        <label><input type="checkbox" checked={bool("enable-rcon") === "true"} onChange={event => update("enable-rcon", String(event.target.checked))} />启用 RCON</label>
-      </div>
-      <label>服务器 MOTD<input value={properties.motd ?? ""} onChange={event => update("motd", event.target.value)} placeholder="A Minecraft Server" /></label>
-      <div className="form-actions"><button className="secondary" disabled={!instancePath || saving} onClick={load}>重新读取</button><button className="primary" disabled={!instancePath || saving} onClick={save}>{saving ? "保存中..." : "保存规则"}</button></div>
+  const booleanFields = [
+    ["enable-command-block", "启用命令方块", "false"],
+    ["allow-flight", "允许飞行", "false"],
+    ["spawn-animals", "生成动物", "true"],
+    ["spawn-monsters", "生成怪物", "true"],
+    ["enable-rcon", "启用 RCON", "false"],
+  ] as const;
+  return <>
+    <div className="fieldset-title">服务端快捷规则</div>
+    <div className="check-grid">
+      {booleanFields.map(([key, label, fallback]) => (
+        <label key={key}><span>{label}</span><select value={bool(key, fallback)} onChange={event => update(key, event.target.value)}><option value="true">是</option><option value="false">否</option></select></label>
+      ))}
     </div>
-  </section>;
+    <div className="form-actions compact-actions"><button className="secondary" disabled={!instancePath || saving} onClick={load}>重新读取</button><button className="primary" disabled={!instancePath || saving} onClick={save}>{saving ? "保存中..." : "保存快捷规则"}</button></div>
+  </>;
 }
 
 function FilesHub({ subTab, setSubTab, instancePath, onError }: { subTab: FilesTab; setSubTab: (tab: FilesTab) => void; instancePath: string; onError: (msg: string) => void }) {
@@ -804,7 +899,7 @@ function FilesHub({ subTab, setSubTab, instancePath, onError }: { subTab: FilesT
   </section>;
 }
 
-function DownloadTab({ subTab, setSubTab, instancePath, onError }: { subTab: DownloadTabKey; setSubTab: (tab: DownloadTabKey) => void; instancePath: string; onError: (msg: string) => void }) {
+function DownloadTab({ subTab, setSubTab, instancePath, onError, onCoreDownloaded }: { subTab: DownloadTabKey; setSubTab: (tab: DownloadTabKey) => void; instancePath: string; onError: (msg: string) => void; onCoreDownloaded: (serverJar: string) => void }) {
   return <section className="hub-page">
     <TopTabs<DownloadTabKey> value={subTab} onChange={setSubTab} tabs={[
       { key: "java", label: "Java 下载" },
@@ -813,7 +908,7 @@ function DownloadTab({ subTab, setSubTab, instancePath, onError }: { subTab: Dow
       { key: "mods", label: "模组下载" },
     ]} />
     {subTab === "java" && <JavaDownloadView onError={onError} />}
-    {subTab === "core" && <CoreTypeView instancePath={instancePath} onError={onError} />}
+    {subTab === "core" && <CoreTypeView instancePath={instancePath} onError={onError} onCoreDownloaded={onCoreDownloaded} />}
     {subTab === "plugins" && <PluginMarketView kind="plugins" instancePath={instancePath} onError={onError} />}
     {subTab === "mods" && <PluginMarketView kind="mods" instancePath={instancePath} onError={onError} />}
   </section>;
@@ -850,6 +945,12 @@ function SoftwareSettingsView({ subTab, setSubTab, autoRestart, onAutoRestartCha
   const [aiEndpoint, setAiEndpoint] = useState(() => localStorage.getItem("astrore.ai.endpoint") ?? "https://api.openai.com/v1/chat/completions");
   const [aiModel, setAiModel] = useState(() => localStorage.getItem("astrore.ai.model") ?? "");
   const [aiKey, setAiKey] = useState(() => localStorage.getItem("astrore.ai.apiKey") ?? "");
+  const [curseForgeKey, setCurseForgeKey] = useState("");
+  const [apiStatus, setApiStatus] = useState("");
+  const [mcpRegistry, setMcpRegistry] = useState(() => localStorage.getItem("astrore.extensions.registry") ?? "https://zkonikishi.github.io/Astrore-docs/registry/index.json");
+  const [allowExternalMcp, setAllowExternalMcp] = useState(() => localStorage.getItem("astrore.mcp.allowExternal") !== "false");
+  const [confirmMcpPermissions, setConfirmMcpPermissions] = useState(() => localStorage.getItem("astrore.mcp.confirmPermissions") !== "false");
+  const [mcpStatus, setMcpStatus] = useState("");
   const [providerQuery, setProviderQuery] = useState("");
   const selectedAiProvider = findProviderById(aiProvider);
   const filteredProviders = useMemo(() => {
@@ -859,6 +960,11 @@ function SoftwareSettingsView({ subTab, setSubTab, autoRestart, onAutoRestartCha
       [provider.name, provider.tag, provider.id, ...provider.models].some(value => value.toLowerCase().includes(query)),
     );
   }, [providerQuery]);
+  useEffect(() => {
+    getCurseForgeApiKey()
+      .then(setCurseForgeKey)
+      .catch(() => setCurseForgeKey(localStorage.getItem("astrore.curseforge.apiKey") ?? ""));
+  }, []);
   const saveAgent = () => {
     if (agentUrl.trim()) localStorage.setItem("astrore.agentUrl", agentUrl.trim().replace(/\/+$/, ""));
     else localStorage.removeItem("astrore.agentUrl");
@@ -876,6 +982,27 @@ function SoftwareSettingsView({ subTab, setSubTab, autoRestart, onAutoRestartCha
     localStorage.setItem("astrore.ai.model", aiModel.trim());
     localStorage.setItem("astrore.ai.apiKey", aiKey);
   };
+  const saveApi = async () => {
+    try {
+      await saveCurseForgeApiKey(curseForgeKey);
+      localStorage.removeItem("astrore.curseforge.apiKey");
+      setApiStatus(curseForgeKey.trim() ? "CurseForge API Key 已加密保存到本机" : "CurseForge API Key 已清除");
+    } catch (error) {
+      setApiStatus(`保存失败：${String(error)}`);
+    }
+  };
+  const saveMcp = async () => {
+    const registry = mcpRegistry.trim() || "https://zkonikishi.github.io/Astrore-docs/registry/index.json";
+    if (!registry.startsWith("https://") && registry !== "/registry/index.json") {
+      setMcpStatus("扩展注册表必须使用 HTTPS 地址");
+      return;
+    }
+    localStorage.setItem("astrore.extensions.registry", registry);
+    localStorage.setItem("astrore.mcp.allowExternal", String(allowExternalMcp));
+    localStorage.setItem("astrore.mcp.confirmPermissions", String(confirmMcpPermissions));
+    await saveApi();
+    setMcpStatus("MCP 设置已保存，扩展商店刷新后生效");
+  };
   const changeAiProvider = (providerId: string) => {
     const provider = findProviderById(providerId);
     setAiProvider(providerId);
@@ -884,18 +1011,42 @@ function SoftwareSettingsView({ subTab, setSubTab, autoRestart, onAutoRestartCha
     setAiModel(provider.defaultModel || provider.models[0] || aiModel);
   };
   return <section className="hub-page software-settings">
-    <TopTabs<SoftwareTab> value={subTab} onChange={setSubTab} tabs={[{ key: "basic", label: "基本设置" }, { key: "ai", label: "AI 助手设置" }]} />
+    <TopTabs<SoftwareTab> value={subTab} onChange={setSubTab} tabs={[{ key: "basic", label: "基本设置" }, { key: "mcp", label: "MCP 设置" }, { key: "ai", label: "AI 助手设置" }]} />
     {subTab === "basic" && <div className="panel">
       <PanelHeader icon={<Settings />} title="基本设置" action="全局配置" />
       <label>软件语言<select value={language} onChange={event => setLanguage(event.target.value)}><option value="zh-CN">简体中文</option><option value="en-US">English</option><option value="ja-JP">日本語</option></select></label>
       <label>主题<select value={theme} onChange={event => setTheme(event.target.value)}><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label>
       <div className="setting-row">
         <div><span>崩溃自动重启</span><small>服务端意外退出时自动重新启动</small></div>
-        <input type="checkbox" checked={autoRestart.enabled} onChange={(e) => onAutoRestartChange({ ...autoRestart, enabled: e.target.checked })} />
+        <select value={String(autoRestart.enabled)} onChange={(e) => onAutoRestartChange({ ...autoRestart, enabled: e.target.value === "true" })}><option value="true">是</option><option value="false">否</option></select>
       </div>
       <label>最大重启次数<input type="number" min={1} max={10} value={autoRestart.maxRestarts} onChange={(e) => onAutoRestartChange({ ...autoRestart, maxRestarts: Number(e.target.value) })} /></label>
       <label>重启延迟（秒）<input type="number" min={1} max={60} value={autoRestart.restartDelaySecs} onChange={(e) => onAutoRestartChange({ ...autoRestart, restartDelaySecs: Number(e.target.value) })} /></label>
       <div className="form-actions"><button className="primary" onClick={() => { saveBasic(); setAutoRestartConfig(autoRestart).catch(() => undefined); }}>保存设置</button></div>
+    </div>}
+    {subTab === "mcp" && <div className="panel agent-settings">
+      <PanelHeader icon={<Puzzle />} title="MCP 设置" action="扩展与插件源" />
+      <div className="settings-section">
+        <strong>扩展商店注册表</strong>
+        <p>用于从项目主站或第三方注册表获取 Astrore 扩展列表。第三方注册表必须使用 HTTPS，安装时仍会校验包体大小和 SHA-256。</p>
+      </div>
+      <label>注册表地址<input value={mcpRegistry} onChange={event => setMcpRegistry(event.target.value)} placeholder="https://zkonikishi.github.io/Astrore-docs/registry/index.json" /></label>
+      <div className="setting-row">
+        <div><span>允许外部 MCP 扩展</span><small>外部 MCP 会启动本机进程，功能更强但风险高于 WASI 沙箱扩展</small></div>
+        <select value={String(allowExternalMcp)} onChange={event => setAllowExternalMcp(event.target.value === "true")}><option value="true">是</option><option value="false">否</option></select>
+      </div>
+      <div className="setting-row">
+        <div><span>启动前确认权限</span><small>启动扩展前显示权限声明，避免误启动高风险扩展</small></div>
+        <select value={String(confirmMcpPermissions)} onChange={event => setConfirmMcpPermissions(event.target.value === "true")}><option value="true">是</option><option value="false">否</option></select>
+      </div>
+      <div className="settings-section">
+        <strong>下载源 API</strong>
+        <p>CurseForge API Key 用于插件下载和模组下载页面接入 CurseForge 搜索、读取版本文件与下载地址。桌面端会加密保存到本机，不会写入项目源码或发布包。</p>
+        <a href="https://console.curseforge.com/" target="_blank" rel="noreferrer">申请 CurseForge API Key</a>
+      </div>
+      <label>CurseForge API Key<input type="password" value={curseForgeKey} onChange={event => setCurseForgeKey(event.target.value)} placeholder="e345... 或留空清除" /></label>
+      {(apiStatus || mcpStatus) && <div className="settings-note">{mcpStatus || apiStatus}</div>}
+      <div className="form-actions"><button className="primary" onClick={saveMcp}>保存 MCP 设置</button></div>
     </div>}
     {subTab === "ai" && <div className="panel agent-settings">
       <PanelHeader icon={<Bot />} title="AI 助手设置" action="Provider" />
@@ -906,15 +1057,20 @@ function SoftwareSettingsView({ subTab, setSubTab, autoRestart, onAutoRestartCha
       <div className="ai-provider-grid" role="list" aria-label="AI 厂商">
         {filteredProviders.map(provider => (
           <button type="button" key={provider.id} className={aiProvider === provider.id ? "ai-provider-card selected" : "ai-provider-card"} onClick={() => changeAiProvider(provider.id)}>
-            <span className="ai-provider-icon">{provider.icon}</span>
+            <span className="ai-provider-icon">
+              {AI_PROVIDER_LOGOS[provider.id] && <img src={AI_PROVIDER_LOGOS[provider.id]} alt="" referrerPolicy="no-referrer" onError={hideBrokenImage} />}
+              <span>{provider.icon}</span>
+            </span>
             <span className="ai-provider-name">{provider.name}</span>
             <span className="ai-provider-tag">{provider.tag}</span>
-            {aiProvider === provider.id && <span className="ai-provider-check">✓</span>}
           </button>
         ))}
       </div>
       {selectedAiProvider && <div className="ai-provider-detail">
-        <span className="ai-provider-detail-icon">{selectedAiProvider.icon}</span>
+        <span className="ai-provider-detail-icon">
+          {AI_PROVIDER_LOGOS[selectedAiProvider.id] && <img src={AI_PROVIDER_LOGOS[selectedAiProvider.id]} alt="" referrerPolicy="no-referrer" onError={hideBrokenImage} />}
+          <span>{selectedAiProvider.icon}</span>
+        </span>
         <div>
           <strong>{selectedAiProvider.name} · {selectedAiProvider.tag}</strong>
           <small>{selectedAiProvider.endpoint}</small>

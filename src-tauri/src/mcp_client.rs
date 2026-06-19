@@ -171,7 +171,7 @@ impl McpClient {
             method: method.into(),
             params,
         };
-        let mut stdin = child.stdin.as_mut().ok_or("无法写入扩展 stdin")?;
+        let stdin = child.stdin.as_mut().ok_or("无法写入扩展 stdin")?;
         let line = serde_json::to_string(&request).map_err(|e| format!("序列化请求失败: {e}"))?;
         writeln!(stdin, "{line}").map_err(|e| format!("写入请求失败: {e}"))?;
         stdin.flush().map_err(|e| format!("刷新 stdin 失败: {e}"))?;
@@ -180,9 +180,17 @@ impl McpClient {
         let mut reader = std::io::BufReader::new(stdout);
         let mut response_line = String::new();
         use std::io::BufRead;
-        reader.read_line(&mut response_line).map_err(|e| format!("读取响应失败: {e}"))?;
+        let bytes_read = reader.read_line(&mut response_line).map_err(|e| format!("Read extension response failed: {e}"))?;
+        if bytes_read == 0 || response_line.trim().is_empty() {
+            let exited = child
+                .try_wait()
+                .map_err(|e| format!("Check extension process failed: {e}"))?
+                .map(|status| format!("; process exited with {status}"))
+                .unwrap_or_default();
+            return Err(format!("Extension {} did not return a JSON-RPC response{exited}. Check the extension entry, dependencies, and stderr logs.", self.manifest.name));
+        }
 
-        let response: JsonRpcResponse = serde_json::from_str(&response_line).map_err(|e| format!("解析响应失败: {e}"))?;
+        let response: JsonRpcResponse = serde_json::from_str(&response_line).map_err(|e| format!("Parse extension response failed: {e}"))?;
         if let Some(err) = response.error {
             return Err(format!("扩展返回错误: {}", err.message));
         }

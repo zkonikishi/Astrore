@@ -1,10 +1,11 @@
 use axum::{
-    extract::{ws::{Message, WebSocket, WebSocketUpgrade}, Path as AxumPath, State},
+    extract::{ws::{Message, WebSocket, WebSocketUpgrade}, DefaultBodyLimit, Path as AxumPath, State},
     http::{HeaderMap, Method, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
+use base64::{engine::general_purpose, Engine as _};
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -26,6 +27,58 @@ use tower_http::{cors::CorsLayer, services::ServeDir};
 
 fn agent_user_agent() -> String {
     format!("Astrore-Agent/{}", env!("CARGO_PKG_VERSION"))
+}
+
+fn host_matches(host: &str, domain: &str) -> bool {
+    host == domain || host.ends_with(&format!(".{domain}"))
+}
+
+fn is_allowed_java_download_host(host: &str) -> bool {
+    [
+        "adoptium.net",
+        "microsoft.com",
+        "azul.com",
+        "download.oracle.com",
+        "github.com",
+        "githubusercontent.com",
+    ]
+    .iter()
+    .any(|domain| host_matches(host, domain))
+}
+
+async fn resolve_fastmirror_core_name(core_name: &str) -> Result<String, String> {
+    let data: Value = reqwest::Client::new()
+        .get("https://download.fastmirror.net/api/v3")
+        .header("User-Agent", agent_user_agent())
+        .send()
+        .await
+        .map_err(|error| format!("Fetch FastMirror core list failed: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("FastMirror core list request failed: {error}"))?
+        .json()
+        .await
+        .map_err(|error| format!("Parse FastMirror core list failed: {error}"))?;
+    data["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item["name"].as_str())
+        .find(|name| name.eq_ignore_ascii_case(core_name))
+        .map(str::to_string)
+        .ok_or_else(|| format!("FastMirror does not provide core: {core_name}"))
+}
+
+async fn parse_json_response(response: reqwest::Response, label: &str) -> Result<Value, String> {
+    let status = response.status();
+    let text = response.text().await.map_err(|error| format!("{label} read response failed: {error}"))?;
+    let preview: String = text.chars().take(180).collect();
+    if !status.is_success() {
+        return Err(format!("{label} request failed ({status}): {preview}"));
+    }
+    if text.trim().is_empty() {
+        return Err(format!("{label} returned an empty response; retry later or switch source"));
+    }
+    serde_json::from_str(&text).map_err(|error| format!("{label} response parse failed: {error}; first 180 chars: {preview}"))
 }
 
 #[cfg(windows)]
@@ -132,6 +185,106 @@ struct SpigetResource {
     version: String,
 }
 
+fn java_platform() -> (&'static str, &'static str) {
+    let os = match env::consts::OS {
+        "windows" => "windows",
+        "macos" => "mac",
+        "linux" => "linux",
+        _ => "linux",
+    };
+    let arch = match env::consts::ARCH {
+        "x86_64" => "x64",
+        "aarch64" => "aarch64",
+        _ => "x64",
+    };
+    (os, arch)
+}
+
+async fn list_java_releases_agent(vendor: Option<String>, java_version: Option<u32>) -> Result<Value, String> {
+    let vendor_code = match vendor.as_deref() {
+        Some("temurin") | None => "eclipse",
+        Some("microsoft") => "microsoft",
+        Some("zulu") => "azul",
+        Some("graalvm") => "graalvm",
+        _ => "eclipse",
+    };
+    let version = java_version.unwrap_or(21);
+    let (target_os, target_arch) = java_platform();
+    if vendor.as_deref() == Some("oracle") {
+        if !matches!(version, 21 | 25) {
+            return Ok(Value::Array(Vec::new()));
+        }
+        let os_part = match target_os {
+            "windows" => "windows",
+            "mac" => "macos",
+            "linux" => "linux",
+            _ => "linux",
+        };
+        let arch_part = match target_arch {
+            "aarch64" => "aarch64",
+            _ => "x64",
+        };
+        let ext = match target_os {
+            "windows" => "exe",
+            "mac" => "dmg",
+            _ => "tar.gz",
+        };
+        let file_name = format!("jdk-{version}_{os_part}-{arch_part}_bin.{ext}");
+        return Ok(json!([{
+            "version": format!("{version}-latest"),
+            "major": version,
+            "downloadUrl": format!("https://download.oracle.com/java/{version}/latest/{file_name}"),
+            "fileName": file_name,
+            "sizeMb": 0.0
+        }]));
+    }
+    let url = format!("https://api.adoptium.net/v3/assets/feature_releases/{version}/ga?page_size=20&image_type=jdk&jvm_impl=hotspot&vendor={vendor_code}");
+    let response = reqwest::Client::new()
+        .get(url)
+        .header("User-Agent", agent_user_agent())
+        .header("Accept", "application/json")
+        .header("Accept-Encoding", "identity")
+        .send()
+        .await
+        .map_err(|error| format!("获取 Java 列表失败: {error}"))?;
+    let status = response.status();
+    let text = response.text().await.map_err(|error| format!("读取 Java 列表失败: {error}"))?;
+    let preview: String = text.chars().take(180).collect();
+    if !status.is_success() {
+        return Err(format!("获取 Java 列表失败 ({status}): {preview}"));
+    }
+    if text.trim().is_empty() {
+        return Err("Java 下载源返回空响应".into());
+    }
+    let data: Value = serde_json::from_str(&text).map_err(|error| format!("解析 Java 列表失败: {error}; {preview}"))?;
+    let mut releases = data
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|item| {
+            let semver = item["version_data"]["semver"].as_str().unwrap_or_default().to_string();
+            let major = item["version_data"]["major"].as_u64().unwrap_or(version as u64);
+            item["binaries"].as_array().into_iter().flatten().filter_map(move |binary| {
+                if binary["os"].as_str() != Some(target_os) || binary["architecture"].as_str() != Some(target_arch) {
+                    return None;
+                }
+                let pkg = binary["installer"].as_object().or_else(|| binary["package"].as_object())?;
+                let download_url = pkg["link"].as_str()?.to_string();
+                let file_name = pkg["name"].as_str()?.to_string();
+                Some(json!({
+                    "version": semver,
+                    "major": major,
+                    "downloadUrl": download_url,
+                    "fileName": file_name,
+                    "sizeMb": pkg["size"].as_f64().unwrap_or(0.0) / 1048576.0
+                }))
+            })
+        })
+        .collect::<Vec<_>>();
+    releases.sort_by(|a, b| b["version"].as_str().unwrap_or_default().cmp(a["version"].as_str().unwrap_or_default()));
+    Ok(Value::Array(releases))
+}
+
 fn error(status: StatusCode, message: impl Into<String>) -> (StatusCode, Json<Value>) {
     (status, Json(json!({ "error": message.into() })))
 }
@@ -154,6 +307,50 @@ fn root(value: &Value) -> Result<PathBuf, String> {
         return Err("实例目录不存在".into());
     }
     root.canonicalize().map_err(|error| error.to_string())
+}
+
+fn managed_server_dir() -> Result<PathBuf, String> {
+    let base = env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+        .unwrap_or(env::current_dir().map_err(|error| error.to_string())?);
+    let dir = base.join("MCServers");
+    fs::create_dir_all(&dir).map_err(|error| format!("创建 MCServers 目录失败: {error}"))?;
+    dir.canonicalize().map_err(|error| error.to_string())
+}
+
+fn scan_server_jars(root: &Path) -> Result<Vec<String>, String> {
+    let mut jars = Vec::new();
+    for entry in fs::read_dir(root).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        if path.is_file()
+            && path.extension().and_then(|value| value.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("jar"))
+        {
+            if let Some(name) = path.file_name().and_then(|value| value.to_str()) {
+                jars.push(name.to_string());
+            }
+        }
+    }
+    jars.sort_by_key(|name| name.to_lowercase());
+    Ok(jars)
+}
+
+fn managed_server_state() -> Result<Value, String> {
+    let root = managed_server_dir()?;
+    Ok(json!({
+        "instancePath": root.to_string_lossy(),
+        "cores": scan_server_jars(&root)?
+    }))
+}
+
+fn picked_server_core(file_name: &str) -> Result<Value, String> {
+    let root = managed_server_dir()?;
+    Ok(json!({
+        "instancePath": root.to_string_lossy(),
+        "serverJar": file_name,
+        "instanceName": "MCServers"
+    }))
 }
 
 fn safe_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
@@ -310,6 +507,14 @@ fn list_directory(args: &Value) -> Result<Value, String> {
     let root = root(args)?;
     let relative = args.get("relativePath").and_then(Value::as_str).unwrap_or("");
     let directory = safe_path(&root, relative)?;
+    if !directory.exists() {
+        let top = relative.split(['/', '\\']).next().unwrap_or_default();
+        if matches!(top, "plugins" | "mods" | "config" | "logs" | "world") {
+            fs::create_dir_all(&directory).map_err(|error| format!("创建目录失败: {error}"))?;
+        } else {
+            return Ok(json!([]));
+        }
+    }
     let mut entries = Vec::new();
     for entry in fs::read_dir(directory).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
@@ -678,6 +883,56 @@ async fn invoke(command: &str, args: Value, state: &AgentState) -> Result<Value,
             Ok(Value::Null)
         }
         "cancel_download" => Ok(Value::Null),
+        "get_managed_server_state" => managed_server_state(),
+        "import_server_core_file" => {
+            let file_name = args.get("fileName").and_then(Value::as_str).ok_or("缺少文件名")?;
+            let safe_name = Path::new(file_name)
+                .file_name()
+                .and_then(|value| value.to_str())
+                .filter(|value| value.to_lowercase().ends_with(".jar"))
+                .ok_or("请选择 .jar 服务端核心文件")?
+                .to_string();
+            let content = args.get("contentBase64").and_then(Value::as_str).ok_or("缺少文件内容")?;
+            let bytes = general_purpose::STANDARD.decode(content.trim()).map_err(|error| error.to_string())?;
+            let root = managed_server_dir()?;
+            fs::write(root.join(&safe_name), bytes).map_err(|error| error.to_string())?;
+            picked_server_core(&safe_name)
+        }
+        "list_java_releases" => {
+            let vendor = args.get("vendor").and_then(Value::as_str).map(str::to_string);
+            let java_version = args.get("javaVersion").and_then(Value::as_u64).map(|value| value as u32);
+            list_java_releases_agent(vendor, java_version).await
+        }
+        "download_java" => {
+            let download_url = args.get("downloadUrl").and_then(Value::as_str).ok_or("缺少下载地址")?;
+            let file_name = args.get("fileName").and_then(Value::as_str).ok_or("缺少文件名")?;
+            let safe_name = Path::new(file_name)
+                .file_name()
+                .and_then(|value| value.to_str())
+                .filter(|value| !value.trim().is_empty())
+                .ok_or("无效的文件名")?
+                .to_string();
+            let url = reqwest::Url::parse(download_url).map_err(|error| format!("无效的下载地址: {error}"))?;
+            let host = url.host_str().ok_or("下载地址缺少主机名")?;
+            if url.scheme() != "https" || !is_allowed_java_download_host(host) {
+                return Err("不允许的 Java 下载地址".into());
+            }
+            let target_dir = dirs_next::download_dir().unwrap_or(env::current_dir().map_err(|error| error.to_string())?);
+            fs::create_dir_all(&target_dir).map_err(|error| error.to_string())?;
+            let bytes = reqwest::Client::new()
+                .get(url)
+                .header("User-Agent", agent_user_agent())
+                .send()
+                .await
+                .map_err(|error| format!("下载失败: {error}"))?
+                .error_for_status()
+                .map_err(|error| format!("下载请求失败: {error}"))?
+                .bytes()
+                .await
+                .map_err(|error| format!("读取下载内容失败: {error}"))?;
+            fs::write(target_dir.join(&safe_name), bytes).map_err(|error| error.to_string())?;
+            Ok(json!(safe_name))
+        }
         "list_server_cores" => {
             let data: Value = reqwest::Client::new().get("https://download.fastmirror.net/api/v3").header("User-Agent", agent_user_agent())
                 .send().await.map_err(|error| error.to_string())?.error_for_status().map_err(|error| error.to_string())?
@@ -688,6 +943,7 @@ async fn invoke(command: &str, args: Value, state: &AgentState) -> Result<Value,
         }
         "list_core_builds" => {
             let core = args.get("coreName").and_then(Value::as_str).ok_or("缺少核心名称")?;
+            let core = resolve_fastmirror_core_name(core).await?;
             let version = args.get("mcVersion").and_then(Value::as_str).ok_or("缺少 Minecraft 版本")?;
             let data: Value = reqwest::Client::new().get(format!("https://download.fastmirror.net/api/v3/{core}/{version}"))
                 .query(&[("offset", 0), ("limit", 30)]).header("User-Agent", agent_user_agent())
@@ -698,8 +954,9 @@ async fn invoke(command: &str, args: Value, state: &AgentState) -> Result<Value,
             })).collect()))
         }
         "download_server_core" => {
-            let root = root(&args)?;
+            let root = root(&args).or_else(|_| managed_server_dir())?;
             let core = args.get("coreName").and_then(Value::as_str).ok_or("缺少核心名称")?;
+            let core = resolve_fastmirror_core_name(core).await?;
             let version = args.get("mcVersion").and_then(Value::as_str).ok_or("缺少 Minecraft 版本")?;
             let build = args.get("build").and_then(Value::as_str).ok_or("缺少构建版本")?;
             let data: Value = reqwest::Client::new().get(format!("https://download.fastmirror.net/api/v3/{core}/{version}/{build}"))
@@ -780,7 +1037,7 @@ async fn invoke(command: &str, args: Value, state: &AgentState) -> Result<Value,
             Ok(Value::Array(builds))
         }
         "download_official_server_core" => {
-            let root = root(&args)?;
+            let root = root(&args).or_else(|_| managed_server_dir())?;
             let core = args.get("coreName").and_then(Value::as_str).ok_or("missing coreName")?;
             let version = args.get("mcVersion").and_then(Value::as_str).ok_or("missing mcVersion")?;
             let build = args.get("build").and_then(Value::as_str).ok_or("missing build")?;
@@ -838,19 +1095,74 @@ async fn invoke(command: &str, args: Value, state: &AgentState) -> Result<Value,
                     "fileName": file["filename"], "gameVersions": item["game_versions"], "loaders": item["loaders"] }))
             }).collect()))
         }
+        "search_hangar" => {
+            let query = args.get("query").and_then(Value::as_str).unwrap_or("popular");
+            let response_text = reqwest::Client::new()
+                .get("https://hangar.papermc.io/api/v1/projects")
+                .query(&[("query", query), ("limit", "20"), ("offset", "0")])
+                .header("User-Agent", agent_user_agent())
+                .send().await.map_err(|error| format!("Hangar search failed: {error}"))?
+                .error_for_status().map_err(|error| format!("Hangar returned an error: {error}"))?
+                .text().await.map_err(|error| format!("Read Hangar response failed: {error}"))?;
+            if response_text.trim().is_empty() { return Err("Hangar returned an empty response".into()); }
+            let data: Value = serde_json::from_str(&response_text).map_err(|error| format!("Parse Hangar response failed: {error}"))?;
+            Ok(Value::Array(data["result"].as_array().into_iter().flatten().map(|item| {
+                let owner = item["namespace"]["owner"].as_str().unwrap_or_default();
+                let slug = item["namespace"]["slug"].as_str().unwrap_or_else(|| item["name"].as_str().unwrap_or_default());
+                json!({
+                    "name": slug,
+                    "title": item["name"],
+                    "description": item["description"],
+                    "iconUrl": item["avatarUrl"].as_str().unwrap_or_default(),
+                    "downloads": item["stats"]["downloads"],
+                    "categories": ["paper", item["category"].as_str().unwrap_or("plugin")],
+                    "projectId": format!("{owner}/{slug}").trim_matches('/').to_string()
+                })
+            }).collect()))
+        }
+        "get_hangar_versions" => {
+            let project = args.get("projectId").and_then(Value::as_str).ok_or("缺少 Hangar 项目 ID")?;
+            let safe_id = project
+                .split('/')
+                .filter(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.')))
+                .collect::<Vec<_>>()
+                .join("/");
+            if safe_id.is_empty() { return Err("无效的 Hangar 项目 ID".into()); }
+            let response_text = reqwest::Client::new()
+                .get(format!("https://hangar.papermc.io/api/v1/projects/{safe_id}/versions"))
+                .query(&[("limit", "20"), ("offset", "0")])
+                .header("User-Agent", agent_user_agent())
+                .send().await.map_err(|error| format!("Hangar versions failed: {error}"))?
+                .error_for_status().map_err(|error| format!("Hangar returned an error: {error}"))?
+                .text().await.map_err(|error| format!("Read Hangar response failed: {error}"))?;
+            if response_text.trim().is_empty() { return Err("Hangar returned an empty response".into()); }
+            let data: Value = serde_json::from_str(&response_text).map_err(|error| format!("Parse Hangar response failed: {error}"))?;
+            Ok(Value::Array(data["result"].as_array().into_iter().flatten().filter_map(|item| {
+                let platform = if item["downloads"]["PAPER"].is_object() { "paper" } else { "velocity" };
+                let download = item["downloads"]["PAPER"].as_object().or_else(|| item["downloads"]["VELOCITY"].as_object())?;
+                let file_name = download["fileInfo"]["name"].as_str()?;
+                Some(json!({
+                    "name": item["name"].as_str().unwrap_or(file_name),
+                    "versionNumber": item["name"].as_str().unwrap_or(file_name),
+                    "downloadUrl": download["downloadUrl"].as_str().unwrap_or(""),
+                    "fileName": file_name,
+                    "gameVersions": item["platformDependencies"]["PAPER"],
+                    "loaders": [platform]
+                }))
+            }).collect()))
+        }
         "search_curseforge" => {
             let query = args.get("query").and_then(Value::as_str).unwrap_or("popular");
             let kind = args.get("kind").and_then(Value::as_str).unwrap_or("plugins");
-            let api_key = args.get("apiKey").and_then(Value::as_str).ok_or("CurseForge 需要 API Key")?;
+            let api_key = args.get("apiKey").and_then(Value::as_str).ok_or("CurseForge requires an API Key")?;
             let class_id = if kind == "mods" { "6" } else { "4471" };
-            let data: Value = reqwest::Client::new()
+            let response = reqwest::Client::new()
                 .get("https://api.curseforge.com/v1/mods/search")
                 .query(&[("gameId", "432"), ("classId", class_id), ("searchFilter", query), ("pageSize", "20")])
                 .header("x-api-key", api_key)
                 .header("User-Agent", agent_user_agent())
-                .send().await.map_err(|error| format!("CurseForge 搜索失败: {error}"))?
-                .error_for_status().map_err(|error| format!("CurseForge 请求失败: {error}"))?
-                .json().await.map_err(|error| format!("解析失败: {error}"))?;
+                .send().await.map_err(|error| format!("CurseForge search failed: {error}"))?;
+            let data = parse_json_response(response, "CurseForge search").await?;
             Ok(Value::Array(data["data"].as_array().into_iter().flatten().map(|item| json!({
                 "name": item["slug"], "title": item["name"], "description": item["summary"],
                 "iconUrl": item["logo"]["url"], "downloads": item["downloadCount"],
@@ -859,16 +1171,15 @@ async fn invoke(command: &str, args: Value, state: &AgentState) -> Result<Value,
             })).collect()))
         }
         "get_curseforge_files" => {
-            let mod_id = args.get("modId").and_then(Value::as_str).ok_or("缺少 Mod ID")?;
-            let api_key = args.get("apiKey").and_then(Value::as_str).ok_or("CurseForge 需要 API Key")?;
-            let data: Value = reqwest::Client::new()
+            let mod_id = args.get("modId").and_then(Value::as_str).ok_or("Missing Mod ID")?;
+            let api_key = args.get("apiKey").and_then(Value::as_str).ok_or("CurseForge requires an API Key")?;
+            let response = reqwest::Client::new()
                 .get(format!("https://api.curseforge.com/v1/mods/{mod_id}/files"))
                 .query(&[("pageSize", "20")])
                 .header("x-api-key", api_key)
                 .header("User-Agent", agent_user_agent())
-                .send().await.map_err(|error| format!("CurseForge 获取文件失败: {error}"))?
-                .error_for_status().map_err(|error| format!("CurseForge 请求失败: {error}"))?
-                .json().await.map_err(|error| format!("解析失败: {error}"))?;
+                .send().await.map_err(|error| format!("CurseForge files request failed: {error}"))?;
+            let data = parse_json_response(response, "CurseForge files").await?;
             Ok(Value::Array(data["data"].as_array().into_iter().flatten().filter_map(|item| {
                 let file_name = item["fileName"].as_str().unwrap_or_default().to_string();
                 if file_name.is_empty() { return None; }
@@ -890,7 +1201,7 @@ async fn invoke(command: &str, args: Value, state: &AgentState) -> Result<Value,
             if name.is_empty() || name.contains(['/', '\\']) { return Err("无效的文件名".into()); }
             let url = reqwest::Url::parse(args.get("downloadUrl").and_then(Value::as_str).ok_or("缺少下载地址")?).map_err(|error| error.to_string())?;
             let host = url.host_str().ok_or("下载地址缺少主机名")?;
-            if url.scheme() != "https" || !(host == "modrinth.com" || host.ends_with(".modrinth.com") || host == "forgecdn.net" || host.ends_with(".forgecdn.net") || host == "edge.forgecdn.net" || host.ends_with(".curseforge.com")) { return Err("只允许从 Modrinth / CurseForge HTTPS 地址下载".into()); }
+            if url.scheme() != "https" || !(host == "modrinth.com" || host.ends_with(".modrinth.com") || host == "forgecdn.net" || host.ends_with(".forgecdn.net") || host == "edge.forgecdn.net" || host.ends_with(".curseforge.com") || host == "hangarcdn.papermc.io") { return Err("只允许从 Modrinth / CurseForge / Hangar HTTPS 地址下载".into()); }
             let bytes = reqwest::Client::new().get(url).header("User-Agent", agent_user_agent()).send().await.map_err(|error| error.to_string())?
                 .error_for_status().map_err(|error| error.to_string())?.bytes().await.map_err(|error| error.to_string())?;
             let directory = root.join(kind);
@@ -1055,6 +1366,7 @@ async fn main() {
         .route("/api/events", get(websocket))
         .route("/api/invoke/{command}", post(rpc))
         .fallback_service(ServeDir::new(web_root).append_index_html_on_directories(true))
+        .layer(DefaultBodyLimit::max(512 * 1024 * 1024))
         .with_state(state);
     if allow_remote_web {
         app = app.layer(CorsLayer::new().allow_methods([Method::GET, Method::POST]).allow_origin(tower_http::cors::Any).allow_headers(tower_http::cors::Any));

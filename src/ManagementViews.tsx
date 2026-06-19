@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type SyntheticEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Archive, ArrowLeft, Ban, Check, Download, ExternalLink, FileCog, FileText, Folder, Pencil, Plus, RefreshCw, RotateCcw, Save, Search, Shield, Star, Trash2, User, UserPlus, X, XCircle } from "lucide-react";
+import { Archive, ArrowLeft, Ban, Check, Download, FileCog, FileText, Folder, Pencil, Plus, RefreshCw, RotateCcw, Save, Search, Server, Shield, Star, Trash2, User, UserPlus, X, XCircle } from "lucide-react";
 import {
   callExtensionTool,
   cancelDownload,
@@ -9,8 +9,7 @@ import {
   deleteEntry,
   downloadJava,
   downloadPlugin,
-  downloadServerCore,
-  downloadSpigetPlugin,
+  downloadUnifiedServerCore,
   fetchExtensionRegistry,
   getCoreTypes,
   getModrinthVersions,
@@ -19,11 +18,8 @@ import {
   isTauriRuntime,
   listJavaReleases,
   listDirectory,
-  listServerCores,
-  listCoreBuilds,
-  listOfficialCoreVersions,
-  listOfficialCoreBuilds,
-  downloadOfficialServerCore,
+  listUnifiedCoreVersions,
+  listUnifiedCoreBuilds,
   listBackups,
   readPlayerLists,
   readProperties,
@@ -31,9 +27,10 @@ import {
   renameEntry,
   restoreBackup,
   scanExtensions,
-  searchSpiget,
+  searchHangar,
   searchModrinth,
   searchCurseForge,
+  getHangarVersions,
   getCurseForgeFiles,
   searchSpigetAsPlugin,
   startExtension,
@@ -55,7 +52,6 @@ import {
   type PluginInfo,
   type PluginVersion,
   type RegistryExtension,
-  type SpigetResource,
 } from "./bridge";
 
 type CommonProps = { instancePath: string; onError: (message: string) => void };
@@ -66,6 +62,62 @@ const WEB_PREVIEW_EXTENSION_REGISTRY = "/registry/index.json";
 
 const sizeLabel = (size: number) =>
   size < 1024 ? `${size} B` : size < 1024 ** 2 ? `${(size / 1024).toFixed(1)} KB` : `${(size / 1024 ** 2).toFixed(1)} MB`;
+
+const JAVA_VENDORS = [
+  { id: "temurin", name: "Eclipse Temurin", note: "Adoptium LTS", icon: "https://adoptium.net/favicon.ico" },
+  { id: "microsoft", name: "Microsoft OpenJDK", note: "Windows 友好", icon: "https://www.microsoft.com/favicon.ico" },
+  { id: "zulu", name: "Azul Zulu", note: "OpenJDK builds", icon: "https://www.azul.com/favicon.ico" },
+  { id: "graalvm", name: "GraalVM Community", note: "实验运行时", icon: "https://www.graalvm.org/favicon.ico" },
+  { id: "oracle", name: "Oracle Java", note: "Oracle JDK", icon: "https://www.oracle.com/favicon.ico" },
+] as const;
+
+const CORE_ICONS: Record<string, string> = {
+  paper: "https://papermc.io/favicon.ico",
+  folia: "https://papermc.io/favicon.ico",
+  velocity: "https://papermc.io/favicon.ico",
+  purpur: "https://purpurmc.org/favicon.ico",
+  fabric: "https://fabricmc.net/favicon.ico",
+  forge: "https://files.minecraftforge.net/favicon.ico",
+  vanilla: "https://www.minecraft.net/favicon.ico",
+  nukkit: "https://cloudburstmc.org/favicon.ico",
+  pocketmine: "https://pmmp.io/favicon.ico",
+};
+
+const coreIconUrl = (name: string) => {
+  const key = name.toLowerCase();
+  if (key.includes("paper") || key.includes("leaves")) return CORE_ICONS.paper;
+  if (key.includes("folia")) return CORE_ICONS.folia;
+  if (key.includes("velocity")) return CORE_ICONS.velocity;
+  if (key.includes("purpur")) return CORE_ICONS.purpur;
+  if (key.includes("fabric")) return CORE_ICONS.fabric;
+  if (key.includes("forge") || key.includes("arclight") || key.includes("catserver")) return CORE_ICONS.forge;
+  if (key.includes("vanilla")) return CORE_ICONS.vanilla;
+  if (key.includes("pocketmine")) return CORE_ICONS.pocketmine;
+  if (key.includes("nukkit")) return CORE_ICONS.nukkit;
+  return "";
+};
+
+const coreBadge = (name: string) => {
+  const key = name.toLowerCase();
+  if (key === "folia") return "F";
+  if (key === "velocity") return "V";
+  return "";
+};
+
+const hideBrokenImage = (event: SyntheticEvent<HTMLImageElement>) => {
+  event.currentTarget.style.display = "none";
+};
+
+const CORE_CATEGORY_ORDER = ["all", "plugin", "mod", "hybrid", "vanilla", "proxy", "bedrock"] as const;
+const CORE_CATEGORY_LABELS: Record<string, string> = {
+  all: "全部",
+  plugin: "插件端",
+  mod: "模组端",
+  hybrid: "混合端",
+  vanilla: "原版",
+  proxy: "代理端",
+  bedrock: "基岩版",
+};
 
 export function BackupView({ instancePath, onError }: CommonProps) {
   const [backups, setBackups] = useState<BackupInfo[]>([]);
@@ -489,9 +541,10 @@ export function JavaDownloadView({ onError }: { onError: (msg: string) => void }
   const [releases, setReleases] = useState<JavaRelease[]>([]);
   const [progress, setProgress] = useState<DownloadProgress | null>(null);
   const [vendor, setVendor] = useState("temurin");
+  const [javaVersion, setJavaVersion] = useState(21);
   const load = useCallback(() => {
-    listJavaReleases(vendor).then(setReleases).catch(e => onError(String(e)));
-  }, [onError, vendor]);
+    listJavaReleases(vendor, javaVersion).then(setReleases).catch(e => onError(String(e)));
+  }, [onError, vendor, javaVersion]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
     if (!isTauriRuntime()) return;
@@ -502,36 +555,53 @@ export function JavaDownloadView({ onError }: { onError: (msg: string) => void }
   const download = async (release: JavaRelease) => {
     setProgress({ fileName: release.fileName, downloaded: 0, total: 0, percent: 0, status: "starting" });
     try {
-      await downloadJava(release.downloadUrl, release.fileName);
+      const fileName = await downloadJava(release.downloadUrl, release.fileName);
+      setProgress(current => ({ fileName: fileName || release.fileName, downloaded: current?.downloaded ?? 0, total: current?.total ?? 0, percent: 100, status: "completed" }));
     } catch (e) { onError(String(e)); setProgress(null); }
   };
 
-  const vendorLabel = { temurin: "Eclipse Adoptium Temurin", microsoft: "Microsoft Build of OpenJDK", zulu: "Azul Zulu", graalvm: "GraalVM Community" }[vendor] ?? vendor;
+  const vendorInfo = JAVA_VENDORS.find(item => item.id === vendor) ?? JAVA_VENDORS[0];
 
   return <section className="panel manager-panel">
     <div className="manager-toolbar"><Download /><strong>Java 运行时下载</strong><span>{releases.length} 个版本</span><button className="icon-btn" onClick={load}><RefreshCw /></button></div>
-    <div className="download-filter-row">
-      <label>Java 厂商<select value={vendor} onChange={event => setVendor(event.target.value)}><option value="temurin">Eclipse Temurin</option><option value="microsoft">Microsoft Build of OpenJDK</option><option value="zulu">Azul Zulu</option><option value="graalvm">GraalVM Community</option></select></label>
-      <label>推荐版本<select defaultValue="21"><option value="8">Java 8</option><option value="17">Java 17</option><option value="21">Java 21</option><option value="25">Java 25</option></select></label>
-    </div>
-    <div className="market-hero" style={{ minHeight: 120 }}>
-      <strong>{vendorLabel} JDK 21</strong>
-      <span>Java 21 是 Minecraft 1.20.5+ 的推荐版本。下载后可安装到系统，或在实例配置里填写 Java 可执行文件路径。</span>
-    </div>
-    <div className="plugin-list-real">
-      {releases.map(r => (
-        <div key={r.version}>
-          <div className="plugin-state enabled"><Download /></div>
-          <div><strong>JDK {r.major} · {r.version}</strong><span>{r.fileName} · {r.sizeMb.toFixed(1)} MB</span></div>
-          <button className="primary" onClick={() => download(r)} disabled={progress?.status === "downloading"}>下载</button>
+    <div className="java-download-layout">
+      <aside className="java-vendor-list">
+        <strong>Java 厂商</strong>
+        {JAVA_VENDORS.map(item => (
+          <button key={item.id} className={`choice-card brand-card${vendor === item.id ? " selected" : ""}`} onClick={() => setVendor(item.id)}>
+            <img className="choice-card-logo" src={item.icon} alt="" referrerPolicy="no-referrer" onError={hideBrokenImage} />
+            <span>{item.name}</span>
+            <small>{item.note}</small>
+          </button>
+        ))}
+      </aside>
+      <div className="java-release-list">
+        <div className="java-download-head">
+          <div>
+            <img src={vendorInfo.icon} alt="" referrerPolicy="no-referrer" onError={hideBrokenImage} />
+            <div><strong>{vendorInfo.name}</strong><span>选择平台匹配的 JDK 包下载</span></div>
+          </div>
+          <label>Java 版本<select value={javaVersion} onChange={event => setJavaVersion(Number(event.target.value))}><option value={8}>Java 8</option><option value={17}>Java 17</option><option value={21}>Java 21</option><option value={25}>Java 25</option></select></label>
         </div>
-      ))}
+        <div className="java-release-table">
+          <div className="java-release-row table-head"><span>版本</span><span>文件</span><span>大小</span><span>操作</span></div>
+          {releases.map(r => (
+            <div className="java-release-row" key={`${r.fileName}-${r.version}`}>
+              <span><strong>JDK {r.major}</strong><small>{r.version}</small></span>
+              <span title={r.fileName}>{r.fileName}</span>
+              <span>{r.sizeMb > 0 ? `${r.sizeMb.toFixed(1)} MB` : "未知"}</span>
+              <button className="primary" onClick={() => download(r)} disabled={progress?.status === "downloading"}>下载</button>
+            </div>
+          ))}
+          {releases.length === 0 && <Empty text="正在读取 Java 下载列表，或当前平台暂无该厂商构建" />}
+        </div>
+      </div>
     </div>
     {progress && <div className="progress-view" style={{ minHeight: 60, padding: 14 }}><strong>{progress.fileName}</strong><div className="progress-track"><i style={{ width: `${progress.percent}%` }} /></div><span>{progress.status === "completed" ? "下载完成" : `${progress.percent.toFixed(1)}%`}</span></div>}
   </section>;
 }
 
-export function CoreTypeView({ instancePath, onError }: CommonProps) {
+export function CoreTypeView({ instancePath, onError, onCoreDownloaded }: CommonProps & { onCoreDownloaded?: (serverJar: string) => void }) {
   const [coreTypes, setCoreTypes] = useState<CoreTypeInfo[]>([]);
   const [coreName, setCoreName] = useState("");
   const [version, setVersion] = useState("");
@@ -540,7 +610,6 @@ export function CoreTypeView({ instancePath, onError }: CommonProps) {
   const [build, setBuild] = useState("");
   const [progress, setProgress] = useState<DownloadProgress | null>(null);
   const [category, setCategory] = useState("all");
-  const [source, setSource] = useState<"fastmirror" | "official">("fastmirror");
 
   const loadTypes = useCallback(() => {
     getCoreTypes().then(items => { setCoreTypes(items); if (!coreName && items[0]) setCoreName(items[0].name); }).catch(e => onError(String(e)));
@@ -549,77 +618,97 @@ export function CoreTypeView({ instancePath, onError }: CommonProps) {
 
   useEffect(() => {
     if (!coreName) return;
-    if (source === "fastmirror") {
-      listServerCores().then(cores => {
-        const core = cores.find(c => c.name.toLowerCase() === coreName.toLowerCase());
-        if (core) { setVersions(core.mcVersions); if (core.mcVersions[0]) setVersion(core.mcVersions[0]); }
-      }).catch(e => onError(String(e)));
-    } else {
-      listOfficialCoreVersions(coreName).then(vers => { setVersions(vers); if (vers[0]) setVersion(vers[0]); }).catch(e => onError(String(e)));
-    }
-  }, [coreName, source, onError]);
+    listUnifiedCoreVersions(coreName).then(vers => { setVersions(vers); if (vers[0]) setVersion(vers[0]); }).catch(e => onError(String(e)));
+  }, [coreName, onError]);
 
   useEffect(() => {
     if (!coreName || !version) return;
     setBuilds([]); setBuild("");
-    const fetcher = source === "fastmirror"
-      ? listCoreBuilds(coreName, version)
-      : listOfficialCoreBuilds(coreName, version);
-    fetcher.then(items => { setBuilds(items); setBuild(items[0]?.coreVersion ?? ""); }).catch(e => onError(String(e)));
-  }, [coreName, version, source, onError]);
+    listUnifiedCoreBuilds(coreName, version).then(items => { setBuilds(items); setBuild(items[0]?.coreVersion ?? ""); }).catch(e => onError(String(e)));
+  }, [coreName, version, onError]);
   useEffect(() => {
     if (!isTauriRuntime()) return;
     const pending = listen<DownloadProgress>("download-progress", event => setProgress(event.payload));
     return () => { pending.then(unlisten => unlisten()); };
   }, []);
 
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: coreTypes.length };
+    for (const item of coreTypes) counts[item.category] = (counts[item.category] ?? 0) + 1;
+    return counts;
+  }, [coreTypes]);
   const filtered = category === "all" ? coreTypes : coreTypes.filter(c => c.category === category);
-  const fastMirrorUrl = coreName && version
-    ? `https://www.fastmirror.net/#/download/${encodeURIComponent(coreName)}?coreVersion=${encodeURIComponent(version)}`
-    : "https://www.fastmirror.net/#/download";
-  const openFastMirror = () => window.open(fastMirrorUrl, "_blank", "noopener,noreferrer");
+  const switchCategory = (nextCategory: string) => {
+    setCategory(nextCategory);
+    const nextItems = nextCategory === "all" ? coreTypes : coreTypes.filter(c => c.category === nextCategory);
+    if (nextItems.length > 0 && !nextItems.some(item => item.name === coreName)) {
+      setCoreName(nextItems[0].name);
+    }
+  };
 
   const download = (useLatest = false) => {
-    if (!instancePath) return onError("请先配置实例目录");
     const targetBuild = useLatest ? builds[0]?.coreVersion : build;
     if (!targetBuild) return onError("请选择构建版本");
     setProgress({ fileName: "", downloaded: 0, total: 0, percent: 0, status: "starting" });
-    const dl = source === "fastmirror"
-      ? downloadServerCore(instancePath, coreName, version, targetBuild)
-      : downloadOfficialServerCore(instancePath, coreName, version, targetBuild);
-    dl.then(fileName => setProgress(current => ({ fileName: fileName || current?.fileName || "", downloaded: current?.downloaded ?? 0, total: current?.total ?? 0, percent: 100, status: "completed" })))
+    downloadUnifiedServerCore(instancePath, coreName, version, targetBuild)
+      .then(fileName => {
+        if (fileName) onCoreDownloaded?.(fileName);
+        setProgress(current => ({ fileName: fileName || current?.fileName || "", downloaded: current?.downloaded ?? 0, total: current?.total ?? 0, percent: 100, status: "completed" }));
+      })
       .catch(e => { onError(String(e)); setProgress(null); });
   };
 
-  return <section className="download-layout">
-    <div className="panel download-form">
+  const selectedCore = coreTypes.find(item => item.name === coreName);
+
+  return <section className="core-download-layout">
+    <div className="panel core-picker-panel">
       <div className="manager-toolbar"><Download /><strong>服务端核心下载</strong><button className="icon-btn" onClick={loadTypes}><RefreshCw /></button></div>
-      <div className="segmented" style={{ margin: "10px 15px 0" }}>
-        {["all", "pure", "mod", "vanilla", "proxy", "bedrock"].map(cat => (
-          <button key={cat} className={category === cat ? "active" : ""} onClick={() => setCategory(cat)}>
-            {{all: "全部", pure: "纯净", mod: "模组", vanilla: "原版", proxy: "代理", bedrock: "基岩"}[cat]}
+      <div className="segmented core-category-tabs">
+        {CORE_CATEGORY_ORDER.map(cat => (
+          <button key={cat} className={category === cat ? "active" : ""} onClick={() => switchCategory(cat)}>
+            {CORE_CATEGORY_LABELS[cat]} <small>{categoryCounts[cat] ?? 0}</small>
           </button>
         ))}
       </div>
-      <label>下载源<select value={source} onChange={e => { setSource(e.target.value as "fastmirror" | "official"); setVersion(""); setBuilds([]); }}><option value="fastmirror">FastMirror（镜像加速）</option><option value="official">官方源（Paper/Purpur/Vanilla/Fabric）</option></select></label>
-      <label>核心类型<select value={coreName} onChange={e => setCoreName(e.target.value)}>{filtered.map(c => <option key={c.name} value={c.name}>{c.label}</option>)}</select></label>
-      <label>Minecraft 版本<select value={version} onChange={e => setVersion(e.target.value)}>{versions.map((v: string) => <option key={v}>{v}</option>)}</select></label>
-      <label>构建版本<select value={build} onChange={e => setBuild(e.target.value)}>{builds.map(item => <option key={item.coreVersion} value={item.coreVersion}>{item.coreVersion} · {item.updateTime.slice(0, 10)}</option>)}</select></label>
+      <div className="core-card-grid">
+        {filtered.map(c => (
+          <div key={c.name} className={`core-card${coreName === c.name ? " selected" : ""}`} onClick={() => setCoreName(c.name)}>
+            <div className="core-card-icon">{coreBadge(c.name) ? <span className={`core-product-badge ${c.name.toLowerCase()}`}>{coreBadge(c.name)}</span> : coreIconUrl(c.name) ? <img src={coreIconUrl(c.name)} alt="" referrerPolicy="no-referrer" onError={hideBrokenImage} /> : c.recommend ? <Star size={20} /> : <Server size={20} />}</div>
+            <strong>{c.label}</strong>
+            <span className="core-card-meta">{CORE_CATEGORY_LABELS[c.category] ?? c.category}</span>
+          </div>
+        ))}
+        {filtered.length === 0 && <Empty text="当前分类暂无可用核心" />}
+      </div>
+    </div>
+    <div className="panel core-version-panel">
+      <div className="manager-toolbar"><strong>{selectedCore?.label ?? "选择核心"}</strong><span>{selectedCore ? CORE_CATEGORY_LABELS[selectedCore.category] ?? selectedCore.category : "未选择"}</span></div>
+      <div className="picker-block">
+        <strong>Minecraft Version</strong>
+        <div className="version-card-grid">
+          {versions.map((v: string) => <button type="button" key={v} className={version === v ? "version-card selected" : "version-card"} onClick={() => setVersion(v)}>{v}</button>)}
+        </div>
+      </div>
+      <div className="picker-block">
+        <strong>Build Version</strong>
+        <div className="version-card-grid builds">
+          {builds.map(item => <button type="button" key={item.coreVersion} className={build === item.coreVersion ? "version-card selected" : "version-card"} onClick={() => setBuild(item.coreVersion)}><span>{item.coreVersion}</span>{item.updateTime && <small>{item.updateTime.slice(0, 10)}</small>}</button>)}
+        </div>
+      </div>
       {coreName && version && builds.length === 0 && (
         <div className="download-source-hint">
-          <strong>{source === "fastmirror" ? "FastMirror" : "官方源"}</strong>
-          <span>{source === "fastmirror" ? "当前环境没有可用的本地 Agent，已保留核心与版本选择，可打开下载源手动下载。" : "正在从官方 API 获取构建列表..."}</span>
+          <strong>获取构建中</strong>
+          <span>正在从 FastMirror / 官方源获取构建列表...</span>
         </div>
       )}
       <div className="download-buttons">
         <button className="primary" disabled={!build || progress?.status === "downloading"} onClick={() => download(false)}><Download />下载选中构建</button>
         <button className="secondary" disabled={!builds[0] || progress?.status === "downloading"} onClick={() => download(true)}>下载最新构建</button>
-        {source === "fastmirror" && <button className="secondary" onClick={openFastMirror} disabled={!coreName || !version}><ExternalLink size={14} />FastMirror</button>}
       </div>
-    </div>
-    <div className="panel download-status">
+      <div className="download-status-inline">
       <div className="manager-toolbar"><strong>下载状态</strong></div>
       {progress ? <div className="progress-view"><strong>{progress.fileName || `${coreName} ${version}`}</strong><div className="progress-track"><i style={{ width: `${progress.percent}%` }} /></div><span>{progress.status === "completed" ? "下载完成" : progress.status === "cancelled" ? "已取消" : `${progress.percent.toFixed(1)}% · ${sizeLabel(progress.downloaded)} / ${progress.total ? sizeLabel(progress.total) : "未知大小"} · ${progress.speedMbps?.toFixed(1) ?? "0.0"} MB/s`}</span>{progress.status === "downloading" && <button className="danger" onClick={() => cancelDownload()} style={{ marginTop: 8 }}><XCircle size={14} />取消下载</button>}</div> : <Empty text="选择核心版本后下载" />}
+    </div>
     </div>
   </section>;
 }
@@ -628,7 +717,7 @@ function Empty({ text }: { text: string }) { return <div className="empty-state"
 
 export function PluginMarketView({ instancePath, onError, kind: fixedKind }: CommonProps & { kind?: "plugins" | "mods" }) {
   const [kind, setKind] = useState<"plugins" | "mods">(fixedKind ?? "plugins");
-  const [source, setSource] = useState<"modrinth" | "curseforge">("modrinth");
+  const [source, setSource] = useState<"modrinth" | "hangar" | "spiget" | "curseforge">("modrinth");
   const [query, setQuery] = useState("");
   const [gameVersion, setGameVersion] = useState("");
   const [loader, setLoader] = useState("");
@@ -650,6 +739,8 @@ export function PluginMarketView({ instancePath, onError, kind: fixedKind }: Com
       } else if (source === "curseforge") {
         if (!cfApiKey.trim()) { onError("CurseForge 需要 API Key，请在下方设置"); setSearching(false); return; }
         setResults(await searchCurseForge(query.trim() || "popular", kind, cfApiKey.trim()));
+      } else if (source === "hangar") {
+        setResults(await searchHangar(query.trim() || "popular"));
       } else {
         setResults(await searchSpigetAsPlugin(query.trim() || "popular"));
       }
@@ -661,11 +752,21 @@ export function PluginMarketView({ instancePath, onError, kind: fixedKind }: Com
 
   useEffect(() => { if (fixedKind) setKind(fixedKind); }, [fixedKind]);
   useEffect(() => {
+    if (kind === "mods" && (source === "hangar" || source === "spiget")) {
+      setSource("modrinth");
+      setResults([]);
+      setSelected(null);
+      setPopular([]);
+    }
+  }, [kind, source]);
+  useEffect(() => {
     search();
     if (popular.length === 0) {
       const loadPopular = source === "modrinth"
         ? searchModrinth("popular", kind)
-        : source === "curseforge"
+        : source === "hangar"
+          ? searchHangar("popular")
+          : source === "curseforge"
           ? (cfApiKey.trim() ? searchCurseForge("popular", kind, cfApiKey.trim()) : Promise.resolve([]))
           : searchSpigetAsPlugin("popular");
       loadPopular.then(items => setPopular(items.slice(0, 8))).catch(() => {});
@@ -676,6 +777,8 @@ export function PluginMarketView({ instancePath, onError, kind: fixedKind }: Com
     setSelected(project);
     if (source === "modrinth") {
       try { setVersions(await getModrinthVersions(project.projectId)); } catch (e) { onError(String(e)); }
+    } else if (source === "hangar") {
+      try { setVersions(await getHangarVersions(project.projectId)); } catch (e) { onError(String(e)); }
     } else if (source === "curseforge") {
       try { setVersions(await getCurseForgeFiles(project.projectId, cfApiKey.trim())); } catch (e) { onError(String(e)); }
     }
@@ -707,8 +810,9 @@ export function PluginMarketView({ instancePath, onError, kind: fixedKind }: Com
       {fixedKind && <strong>{fixedKind === "plugins" ? "插件下载" : "模组下载"}</strong>}
       <div className="segmented" style={{ marginLeft: 8 }}>
         <button className={source === "modrinth" ? "active" : ""} onClick={() => { setSource("modrinth"); setResults([]); setSelected(null); setPopular([]); }}>Modrinth</button>
-        <button className={source === "curseforge" ? "active" : ""} onClick={() => { setSource("curseforge"); setResults([]); setSelected(null); setPopular([]); }}>CurseForge</button>
+        {kind === "plugins" && <button className={source === "hangar" ? "active" : ""} onClick={() => { setSource("hangar"); setResults([]); setSelected(null); setPopular([]); }}>Hangar</button>}
         {kind === "plugins" && <button className={source === "spiget" ? "active" : ""} onClick={() => { setSource("spiget"); setResults([]); setSelected(null); setPopular([]); }}>Spiget</button>}
+        <button className={source === "curseforge" ? "active" : ""} onClick={() => { setSource("curseforge"); setResults([]); setSelected(null); setPopular([]); }}>CurseForge</button>
       </div>
       <div className="search" style={{ width: 200, marginLeft: 8 }}>
         <Search size={14} />
@@ -762,7 +866,7 @@ export function PluginMarketView({ instancePath, onError, kind: fixedKind }: Com
       <div>
         <div className="market-hero" style={{ marginBottom: 12 }}>
           <strong>{kind === "plugins" ? "🔥 最热插件" : "🔥 最热模组"}</strong>
-          <span>来自 {source === "modrinth" ? "Modrinth" : source === "curseforge" ? "CurseForge" : "Spiget"} · 按下载量排序</span>
+          <span>来自 {source === "modrinth" ? "Modrinth" : source === "hangar" ? "Hangar" : source === "curseforge" ? "CurseForge" : "Spiget"} · 按下载量排序</span>
         </div>
         <div className="popular-grid">
           {popular.map(item => (
